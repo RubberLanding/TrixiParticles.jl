@@ -106,10 +106,12 @@ function Semidiscretization(systems::Union{AbstractSystem, Nothing}...;
 end
 
 function ranges_vu(systems)
-    sizes_u = [u_nvariables(system) * TrixiParticles.n_integrated_particles(system) for system in systems]
+    sizes_u = [u_nvariables(system) * TrixiParticles.n_integrated_particles(system)
+               for system in systems]
     ranges_u = [(sum(sizes_u[1:(i - 1)]) + 1):sum(sizes_u[1:i]) for i in eachindex(sizes_u)]
 
-    sizes_v = [v_nvariables(system) * TrixiParticles.n_integrated_particles(system) for system in systems]
+    sizes_v = [v_nvariables(system) * TrixiParticles.n_integrated_particles(system)
+               for system in systems]
     ranges_v = [(sum(sizes_v[1:(i - 1)]) + 1):sum(sizes_v[1:i]) for i in eachindex(sizes_v)]
 
     return ranges_v, ranges_u

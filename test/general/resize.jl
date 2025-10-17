@@ -63,7 +63,10 @@
             systems[i].cache.additional_capacity[] = additional_capacities[i]
             resize!(semi, v_ode, u_ode, copy(v_ode), copy(u_ode))
 
+            # @test nparticles(systems[i]) == origin_nparticles[i] + additional_capacities[i]
+            # Test below only holds if we delete particles correctly in the tests before
             @test nparticles(systems[i]) == origin_nparticles[i]
         end
     end
 end
+

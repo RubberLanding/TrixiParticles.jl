@@ -96,11 +96,10 @@ function WeaklyCompressibleSPHSystem(initial_condition,
                                      buffer_size=nothing,
                                      correction=nothing, source_terms=nothing,
                                      surface_tension=nothing, surface_normal_method=nothing,
-                                     reference_particle_spacing=0, color_value=1)
+                                     reference_particle_spacing=0, color_value=1,
+                                     particle_refinement=nothing)#TODO
     buffer = isnothing(buffer_size) ? nothing :
              SystemBuffer(nparticles(initial_condition), buffer_size)
-
-    particle_refinement = nothing # TODO
 
     initial_condition,
     density_diffusion = allocate_buffer(initial_condition,
@@ -463,7 +462,7 @@ end
 function resize_cache!(system::WeaklyCompressibleSPHSystem, n::Int)
     # TODO
     # resize_corrections!(system, n)
-    resize!(system.cache.smoothing_length, n)
+    # resize!(system.cache.smoothing_length, n) # Doesnt work if cache.smoothing_length is Int 
 
     return system
 end
