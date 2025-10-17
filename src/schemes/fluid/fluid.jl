@@ -278,7 +278,7 @@ end
                         m_a, m_b, particle, neighbor, grad_kernel)
 end
 
-function Base.resize!(system::FluidSystem, capacity_system)
+function Base.resize!(system::AbstractFluidSystem, capacity_system)
     error("`resize!`not implemented for $(typeof(system)), yet")
 end
 

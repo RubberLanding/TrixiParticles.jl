@@ -21,8 +21,8 @@ function Base.resize!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
         semi.ranges_u[i] = ranges_u_new[i]
     end
 
-    sizes_u = sum(u_nvariables(system) * n_moving_particles(system) for system in systems)
-    sizes_v = sum(v_nvariables(system) * n_moving_particles(system) for system in systems)
+    sizes_u = sum(u_nvariables(system) * n_integrated_particles(system) for system in systems)
+    sizes_v = sum(v_nvariables(system) * n_integrated_particles(system) for system in systems)
 
     # After `deleteat!`, there are fewer particles, and the `deleteat!(system, v, u)` function
     # ensures that all rejected values are stored at the tail of `v_ode` and `u_ode`.
@@ -62,7 +62,7 @@ function Base.resize!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
     return v_ode
 end
 
-Base.resize!(system::System, capacity_system) = system
+Base.resize!(system::AbstractSystem, capacity_system) = system
 
 function Base.deleteat!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
     # Delete at specific indices
@@ -77,9 +77,9 @@ function Base.deleteat!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
     return semi
 end
 
-Base.deleteat!(system::System, v, u) = system
+Base.deleteat!(system::AbstractSystem, v, u) = system
 
-function Base.deleteat!(system::FluidSystem, v, u)
+function Base.deleteat!(system::AbstractFluidSystem, v, u)
     (; cache) = system
 
     isempty(cache.delete_candidates) && return
@@ -124,7 +124,7 @@ end
 
 @inline capacity(system) = nparticles(system)
 
-@inline function capacity(system::FluidSystem)
+@inline function capacity(system::AbstractFluidSystem)
     (; cache) = system
     return nparticles(system) + cache.additional_capacity[]
 end
