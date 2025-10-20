@@ -64,7 +64,8 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
     v_tmp .= v_ode
     u_tmp .= u_ode
 
-    refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
+    # TODO
+    # refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
 
     resize!(integrator, (length(v_ode), length(u_ode)))
 
@@ -73,8 +74,6 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
 
     return integrator
 end
-
-Base.resize!(a::RecursiveArrayTools.ArrayPartition, sizes::Tuple) = resize!.(a.x, sizes)
 
 function Base.show(io::IO, cb::DiscreteCallback{<:Any, <:ParticleRefinementCallback})
     @nospecialize cb # reduce precompilation time
@@ -117,4 +116,10 @@ function Base.show(io::IO, ::MIME"text/plain",
         ]
         summary_box(io, "ParticleRefinementCallback", setup)
     end
+end
+
+function Base.resize!(A::ArrayPartition, sizes::Tuple)
+    resize!.(A.x, sizes)
+
+    return A
 end

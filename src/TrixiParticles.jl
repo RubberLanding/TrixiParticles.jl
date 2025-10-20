@@ -44,6 +44,7 @@ using TrixiBase: @trixi_timeit, timer, timeit_debug_enabled,
 using PointNeighbors: PointNeighbors, foreach_point_neighbor, copy_neighborhood_search,
                       @threaded
 using WriteVTK: vtk_grid, MeshCell, VTKCellTypes, paraview_collection, vtk_save
+using RecursiveArrayTools: ArrayPartition
 
 # `util.jl` needs to be first because of the macros `@trixi_timeit` and `@threaded`
 include("util.jl")
