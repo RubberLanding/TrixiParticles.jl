@@ -97,11 +97,11 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
                                      buffer_size=nothing,
                                      correction=nothing, source_terms=nothing,
                                      surface_tension=nothing, surface_normal_method=nothing,
-                                     reference_particle_spacing=0, color_value=1)
+                                     reference_particle_spacing=0, color_value=1,
+                                     particle_refinement=nothing)
+
     buffer = isnothing(buffer_size) ? nothing :
              SystemBuffer(nparticles(initial_condition), buffer_size)
-
-    particle_refinement = nothing # TODO
 
     initial_condition,
     density_diffusion = allocate_buffer(initial_condition,
@@ -163,9 +163,11 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
     end
 
     (; particle_spacing) = initial_condition
-    particle_spacing = fill(particle_spacing, n_particles)
-    smoothing_length = fill(smoothing_length, n_particles)
-
+    if !isnothing(particle_refinement)
+        particle_spacing = fill(particle_spacing, n_particles)
+        smoothing_length = fill(smoothing_length, n_particles)
+    end 
+    
     return WeaklyCompressibleSPHSystem(initial_condition, mass, pressure,
                                        density_calculator, state_equation,
                                        smoothing_kernel, acceleration_, viscosity,
