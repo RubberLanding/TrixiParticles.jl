@@ -49,6 +49,7 @@ include("util.jl")
 include("general/abstract_system.jl")
 include("general/general.jl")
 include("setups/setups.jl")
+include("refinement/refinement.jl")
 include("schemes/schemes.jl")
 # `neighborhood_search.jl` requires the system types to be defined
 include("general/neighborhood_search.jl")
@@ -62,7 +63,6 @@ include("general/gpu.jl")
 include("preprocessing/preprocessing.jl")
 include("io/io.jl")
 include("visualization/recipes_plots.jl")
-include("refinement/refinement.jl")
 
 export Semidiscretization, semidiscretize, restart_with!
 export InitialCondition

@@ -50,9 +50,15 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
 end
 
 # TODO
-function create_cache_refinement(initial_condition, refinement)
+function create_cache_refinement(initial_condition, ::Nothing, smoothing_length)
+    return (;)
+end
+
+# TODO
+# If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
+function create_cache_refinement(initial_condition, refinement, smoothing_length)
     return (;)
 end
 
 # TODO 
-function reset_cache_refinement!(cache) end 
+function reset_cache_refinement!(cache) end

@@ -21,28 +21,47 @@ end
 end
 
 # WARNING!
-# See warning above.
-@inline function set_particle_smoothing_length!(v, system::AbstractFluidSystem, particle, smoothing_length)
-    current_smoothing_length(v, system)[particle] = smoothing_length
-
-    return v
+# See warning above. 
+@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, particle,
+                                                smoothing_length)
+    set_particle_smoothing_length!(system, system.particle_refinement, particle,
+                                   smoothing_length)
 end
+
+@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, refinement,
+                                                particle, smoothing_length)
+    current_smoothing_length(system)[particle] = smoothing_length
+end
+
+@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, ::Nothing,
+                                                particle, smoothing_length) end
 
 # WARNING!
 # See warning above.
-@inline function set_particle_mass!(v, system::AbstractFluidSystem, particle, mass)
-    current_mass(v, system)[particle] = mass
-    
-    return v
+@inline function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
+    set_particle_mass!(system, system.particle_refinement, particle, mass)
 end
+
+@inline function set_particle_mass!(system::AbstractFluidSystem, refinement, particle, mass)
+    current_mass(system)[particle] = mass
+end
+
+@inline function set_particle_mass!(system::AbstractFluidSystem, ::Nothing, particle, mass) end
 
 # WARNING!
 # See warning above.
-@inline function set_particle_spacing!(v, system::AbstractFluidSystem, particle, particle_spacing)
-    current_particle_spacing(system, particle)[particle] = particle_spacing
-
-    return v
+@inline function set_particle_spacing!(system::AbstractFluidSystem, particle,
+                                       particle_spacing)
+    set_particle_spacing!(system, system.particle_refinement, particle, particle_spacing)
 end
+
+@inline function set_particle_spacing!(system::AbstractFluidSystem, refinement, particle,
+                                       particle_spacing)
+    current_particle_spacing(system)[particle] = particle_spacing
+end
+
+@inline function set_particle_spacing!(system::AbstractFluidSystem, ::Nothing, particle,
+                                       particle_spacing) end
 
 function create_cache_density(initial_condition, ::SummationDensity)
     density = similar(initial_condition.density)
@@ -55,49 +74,50 @@ function create_cache_density(ic, ::ContinuityDensity)
     return (;)
 end
 
-function create_cache_refinement(initial_condition, ::Nothing, smoothing_length)
-    smoothing_length_factor = smoothing_length / initial_condition.particle_spacing
-    return (; smoothing_length, smoothing_length_factor)
-end
-
-# TODO
-function create_cache_refinement(initial_condition, refinement, smoothing_length)
-    # TODO: If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
-end
-
 @propagate_inbounds function hydrodynamic_mass(system::AbstractFluidSystem, particle)
     return system.mass[particle]
 end
 
-function smoothing_length(system::AbstractFluidSystem, particle)
+function smoothing_length(system::AbstractFluidSystem)
+    return smoothing_length(system, system.particle_refinement)
+end
+
+function smoothing_length(system::AbstractFluidSystem, ::Nothing)
+    return system.smoothing_length
+end
+
+function smoothing_length(system::AbstractFluidSystem, ::ParticleRefinement)
+    error("Global smoothing length is undefined when particle refinement is active. Please specify a particle index: `smoothing_length(system, particle_index)`.")
+end
+
+function smoothing_length(system::AbstractFluidSystem, particle::Int)
     return smoothing_length(system, system.particle_refinement, particle)
 end
 
 function smoothing_length(system::AbstractFluidSystem, ::Nothing, particle)
-    return system.cache.smoothing_length
+    return system.smoothing_length
 end
 
+function smoothing_length(system::AbstractFluidSystem, refinement, particle)
+    return system.smoothing_length[particle]
+end
+
+# TODO
+# This will be called at the beginning of a simulation to obtain the smoothing length. 
+# When particle refinement is active, this initial configuration is assumed to be 
+# uniform and we determine the global smoothing length by querying the first particle.
 function initial_smoothing_length(system::AbstractFluidSystem)
-    return initial_smoothing_length(system, system.particle_refinement)
-end
-
-initial_smoothing_length(system, ::Nothing) = system.cache.smoothing_length
-
-function initial_smoothing_length(system, refinement)
-    # TODO
-    return system.cache.initial_smoothing_length_factor *
-           system.initial_condition.particle_spacing
+    return smoothing_length(system, system.particle_refinement, 1)
 end
 
 @inline function particle_spacing(system::AbstractFluidSystem, particle)
     return particle_spacing(system, system.particle_refinement, particle)
 end
 
-@inline particle_spacing(system, ::Nothing, _) = system.initial_condition.particle_spacing
+@inline particle_spacing(system, ::Nothing, _) = system.particle_spacing
 
 @inline function particle_spacing(system, refinement, particle)
-    (; smoothing_length_factor) = system.cache
-    return smoothing_length(system, particle) / smoothing_length_factor
+    return system.particle_spacing[particle]
 end
 
 function write_u0!(u0, system::AbstractFluidSystem)

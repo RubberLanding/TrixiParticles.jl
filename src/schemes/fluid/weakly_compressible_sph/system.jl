@@ -99,7 +99,6 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
                                      surface_tension=nothing, surface_normal_method=nothing,
                                      reference_particle_spacing=0, color_value=1,
                                      particle_refinement=nothing)
-
     buffer = isnothing(buffer_size) ? nothing :
              SystemBuffer(nparticles(initial_condition), buffer_size)
 
@@ -166,8 +165,8 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
     if !isnothing(particle_refinement)
         particle_spacing = fill(particle_spacing, n_particles)
         smoothing_length = fill(smoothing_length, n_particles)
-    end 
-    
+    end
+
     return WeaklyCompressibleSPHSystem(initial_condition, mass, pressure,
                                        density_calculator, state_equation,
                                        smoothing_kernel, acceleration_, viscosity,
@@ -286,15 +285,15 @@ end
     return system.pressure
 end
 
-@inline function current_smoothing_length(v, system::WeaklyCompressibleSPHSystem)
+@inline function current_smoothing_length(system::WeaklyCompressibleSPHSystem)
     return system.smoothing_length
 end
 
-@inline function current_particle_spacing(v, system::WeaklyCompressibleSPHSystem)
+@inline function current_particle_spacing(system::WeaklyCompressibleSPHSystem)
     return system.particle_spacing
 end
 
-@inline function current_mass(v, system::WeaklyCompressibleSPHSystem)
+@inline function current_mass(system::WeaklyCompressibleSPHSystem)
     return system.mass
 end
 

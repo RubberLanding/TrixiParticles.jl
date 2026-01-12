@@ -100,7 +100,6 @@ function Semidiscretization(systems::Union{AbstractSystem, Nothing}...;
 
     ranges_v, ranges_u = ranges_vu(systems)
 
-
     # Create a tuple of n neighborhood searches for each of the n systems.
     # We will need one neighborhood search for each pair of systems.
     searches = Tuple(Tuple(create_neighborhood_search(neighborhood_search,
