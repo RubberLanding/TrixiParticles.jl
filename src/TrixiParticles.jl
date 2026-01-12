@@ -63,6 +63,7 @@ include("general/gpu.jl")
 include("preprocessing/preprocessing.jl")
 include("io/io.jl")
 include("visualization/recipes_plots.jl")
+include("refinement/refinement.jl")
 
 export Semidiscretization, semidiscretize, restart_with!
 export InitialCondition
