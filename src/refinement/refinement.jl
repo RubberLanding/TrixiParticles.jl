@@ -1,3 +1,5 @@
+include("spacing.jl")
+include("refinement_criteria.jl")
 struct ParticleRefinement{RC, ELTYPE, SP}
     criteria            :: RC             # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     max_spacing_ratio   :: ELTYPE         # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20
@@ -10,7 +12,7 @@ end
 
 function ParticleRefinement(; n_particles, smoothing_length, initial_particle_spacing,
                             max_spacing_ratio, min_spacing,
-                            refinement_criteria=nothing,
+                            refinement_criteria=SpatialRefinementCriterion,
                             splitting_pattern=nothing)
     if !(refinement_criteria isa Tuple)
         refinement_criteria = (refinement_criteria,)
@@ -23,10 +25,10 @@ end
 # TODO:
 function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
     # Apply refinement criterion, e.g. for SpatialRefinementCriterion setting the spacing of particles near the boundary 
-    # apply_refinement_criteria!()
+    apply_refinement_criteria!(semi, v_ode, u_ode)
 
     # Update the spacing of particles (Algorthm 1)
-    # update_particle_spacing()
+    update_particle_spacing(semi, v_ode, u_ode)
 
     # Split the particles (Algorithm 2)
     # split_particles!()
@@ -50,14 +52,20 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
 end
 
 # TODO
-function create_cache_refinement(initial_condition, ::Nothing, smoothing_length)
+function create_cache_refinement(initial_condition, ::Nothing, initial_smoothing_length)
     return (;)
 end
 
 # TODO
 # If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
-function create_cache_refinement(initial_condition, refinement, smoothing_length)
-    return (;)
+function create_cache_refinement(initial_condition, refinement, initial_smoothing_length)
+    n_particles = length(initial_condition.mass)
+    ELTYPE = eltype(initial_condition)
+
+    reference_mass = Vector{ELTYPE}(undef, n_particles)
+    _particle_spacing = Vector{ELTYPE}(undef, n_particles)
+
+    return (; reference_mass, _particle_spacing)
 end
 
 # TODO 
