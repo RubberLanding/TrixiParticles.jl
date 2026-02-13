@@ -20,6 +20,30 @@ end
     return v
 end
 
+# WARNING!
+# See warning above.
+@inline function set_particle_smoothing_length!(v, system::AbstractFluidSystem, particle, smoothing_length)
+    current_smoothing_length(v, system)[particle] = smoothing_length
+
+    return v
+end
+
+# WARNING!
+# See warning above.
+@inline function set_particle_mass!(v, system::AbstractFluidSystem, particle, mass)
+    current_mass(v, system)[particle] = mass
+    
+    return v
+end
+
+# WARNING!
+# See warning above.
+@inline function set_particle_spacing!(v, system::AbstractFluidSystem, particle, particle_spacing)
+    current_particle_spacing(system, particle)[particle] = particle_spacing
+
+    return v
+end
+
 function create_cache_density(initial_condition, ::SummationDensity)
     density = similar(initial_condition.density)
 

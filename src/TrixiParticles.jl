@@ -62,6 +62,7 @@ include("general/gpu.jl")
 include("preprocessing/preprocessing.jl")
 include("io/io.jl")
 include("visualization/recipes_plots.jl")
+include("refinement/refinement.jl")
 
 export Semidiscretization, semidiscretize, restart_with!
 export InitialCondition
@@ -111,5 +112,6 @@ export SurfaceTensionAkinci, CohesionForceAkinci, SurfaceTensionMorris,
        SurfaceTensionMomentumMorris
 export ColorfieldSurfaceNormal
 export SymplecticPositionVerlet
+export ParticleRefinement
 
 end # module

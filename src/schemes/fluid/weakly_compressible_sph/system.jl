@@ -62,7 +62,7 @@ See [Weakly Compressible SPH](@ref wcsph) for more details on the method.
 """
 struct WeaklyCompressibleSPHSystem{NDIMS, ELTYPE <: Real, IC, MA, P, DC, SE, K, V, DD, COR,
                                    PF, SC, ST, B, SRFT, SRFN, PR,
-                                   C} <: AbstractFluidSystem{NDIMS}
+                                   C, PS, SL} <: AbstractFluidSystem{NDIMS}
     initial_condition                 :: IC
     mass                              :: MA     # Array{ELTYPE, 1}
     pressure                          :: P      # Array{ELTYPE, 1}
@@ -81,6 +81,8 @@ struct WeaklyCompressibleSPHSystem{NDIMS, ELTYPE <: Real, IC, MA, P, DC, SE, K, 
     buffer                            :: B
     particle_refinement               :: PR # TODO
     cache                             :: C
+    particle_spacing                  :: PS
+    smoothing_length                  :: SL
 end
 
 # The default constructor needs to be accessible for Adapt.jl to work with this struct.
@@ -160,13 +162,17 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
                  reference_particle_spacing=reference_particle_spacing)
     end
 
+    (; particle_spacing) = initial_condition
+    particle_spacing = fill(particle_spacing, n_particles)
+    smoothing_length = fill(smoothing_length, n_particles)
+
     return WeaklyCompressibleSPHSystem(initial_condition, mass, pressure,
                                        density_calculator, state_equation,
                                        smoothing_kernel, acceleration_, viscosity,
                                        density_diffusion, correction, pressure_acceleration,
                                        shifting_technique, source_terms, surface_tension,
                                        surface_normal_method, buffer, particle_refinement,
-                                       cache)
+                                       cache, particle_spacing, smoothing_length)
 end
 
 function Base.show(io::IO, system::WeaklyCompressibleSPHSystem)
@@ -276,6 +282,18 @@ end
 
 @inline function current_pressure(v, system::WeaklyCompressibleSPHSystem)
     return system.pressure
+end
+
+@inline function current_smoothing_length(v, system::WeaklyCompressibleSPHSystem)
+    return system.smoothing_length
+end
+
+@inline function current_particle_spacing(v, system::WeaklyCompressibleSPHSystem)
+    return system.particle_spacing
+end
+
+@inline function current_mass(v, system::WeaklyCompressibleSPHSystem)
+    return system.mass
 end
 
 @inline system_sound_speed(system::WeaklyCompressibleSPHSystem) = sound_speed(system.state_equation)
