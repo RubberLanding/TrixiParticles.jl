@@ -1,7 +1,7 @@
 name = "TrixiParticles"
 uuid = "66699cd8-9c01-4e9d-a059-b96c86d16b3a"
-authors = ["erik.faulhaber <44124897+efaulhaber@users.noreply.github.com>"]
 version = "0.4.2-dev"
+authors = ["erik.faulhaber <44124897+efaulhaber@users.noreply.github.com>"]
 
 [deps]
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
@@ -60,7 +60,7 @@ Polyester = "0.7.10"
 ReadVTK = "0.2"
 RecipesBase = "1"
 Reexport = "1"
-SciMLBase = "2"
+SciMLBase = "2, 3"
 StaticArrays = "1"
 Statistics = "1"
 StrideArraysCore = "0.5.7"
