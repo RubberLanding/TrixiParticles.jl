@@ -12,7 +12,7 @@ end
 
 function ParticleRefinement(; n_particles, smoothing_length, initial_particle_spacing,
                             max_spacing_ratio, min_spacing,
-                            refinement_criteria=SpatialRefinementCriterion,
+                            refinement_criteria=SpatialRefinementCriterion(),
                             splitting_pattern=nothing)
     if !(refinement_criteria isa Tuple)
         refinement_criteria = (refinement_criteria,)
