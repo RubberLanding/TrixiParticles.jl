@@ -6,6 +6,8 @@ struct ParticleRefinement{RC, ELTYPE, SP}
     min_spacing         :: ELTYPE         # The minimum spacing being used in either boundaries or solids
     splitting_pattern   :: SP
     split_candidates    :: Vector{Int}
+    merge_candidates    :: Vector{Int}
+    delete_candidates   :: Vector{Bool}
     n_new_particles     :: Ref{Int}
     n_current_particles :: Ref{Int}
 end
@@ -18,8 +20,12 @@ function ParticleRefinement(; n_particles, smoothing_length, initial_particle_sp
         refinement_criteria = (refinement_criteria,)
     end
 
+    split_candidates = Vector{Int}(undef, n_particles)
+    merge_candidates = Vector{Int}(undef, n_particles)
+    delete_candidates = Vector{Bool}(undef, n_particles)
+
     return ParticleRefinement(refinement_criteria, max_spacing_ratio, min_spacing,
-                              splitting_pattern, Int[], Ref(0), Ref(0))
+                              splitting_pattern, split_candidates, merge_candidates, delete_candidates, Ref(0), Ref(0))
 end
 
 # TODO:
