@@ -4,7 +4,7 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     max_spacing_ratio       :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
-    smoothing_length_factor :: ELTYPE    # Constant corresponding to the value of smoothing length factor used in the simulation, see Eq. 35 for the merging proceduce
+    smoothing_length_factor :: ELTYPE    # Constant corresponding to the value of smoothing length factor (= smoothing_length / particle_spacing) used in the simulation, see Eq. 35 for the merging proceduce
     splitting_pattern       :: SP
     delete_candidates       :: BARRAY  
     split_candidates        :: IARRAY  
