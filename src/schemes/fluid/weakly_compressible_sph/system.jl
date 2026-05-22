@@ -285,10 +285,6 @@ end
     return system.pressure
 end
 
-@inline function current_smoothing_length(system::WeaklyCompressibleSPHSystem)
-    return system.smoothing_length
-end
-
 @inline function current_particle_spacing(system::WeaklyCompressibleSPHSystem)
     return system.particle_spacing
 end
