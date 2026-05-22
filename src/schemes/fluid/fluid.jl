@@ -25,9 +25,11 @@ end
 # of newly activated particles in a callback.
 # DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
 # outside of callbacks.
-@inline function set_particle_velocity!(v, system::AbstractFluidSystem, particle, velocity)
+@inline function set_particle_velocity!(v, system::AbstractFluidSystem, particle, particle_velocity)
+    velocity = current_velocity(v, system) # Needed e.g. when using `ContinuityDensity`
+
     for dim in 1:ndims(system)
-        v[dim, particle] = velocity[dim]
+        velocity[dim, particle] = particle_velocity[dim]
     end 
 
     return v
