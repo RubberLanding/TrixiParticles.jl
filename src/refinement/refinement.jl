@@ -1,6 +1,6 @@
 include("spacing.jl")
 include("refinement_criteria.jl")
-struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY}
+struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     max_spacing_ratio       :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
@@ -10,11 +10,12 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY}
     split_candidates        :: IARRAY  
     merge_candidates        :: IARRAY  
     n_new_particles         :: IARRAY 
-    n_current_particles     :: IARRAY 
+    n_current_particles     :: IARRAY
+    resize_buffer           :: RB
 end
 
 function ParticleRefinement(; n_particles, smoothing_length, initial_particle_spacing,
-                            max_spacing_ratio, min_spacing, smoothing_length_factor = 1.2,
+                            max_spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
                             splitting_pattern=nothing)
     if !(refinement_criteria isa Tuple)
@@ -30,7 +31,7 @@ function ParticleRefinement(; n_particles, smoothing_length, initial_particle_sp
 
     return ParticleRefinement(refinement_criteria, max_spacing_ratio, min_spacing, smoothing_length_factor,
                               splitting_pattern, split_candidates, merge_candidates, 
-                              delete_candidates, n_new_particles, n_current_particles)
+                              delete_candidates, n_new_particles, n_current_particles, resize_buffer)
 end
 
 # TODO:
