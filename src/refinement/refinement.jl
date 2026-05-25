@@ -30,8 +30,8 @@ function ParticleRefinement(; n_particles, smoothing_length, initial_particle_sp
     n_current_particles = zeros(Int, 1)
 
     return ParticleRefinement(refinement_criteria, max_spacing_ratio, min_spacing, smoothing_length_factor,
-                              splitting_pattern, split_candidates, merge_candidates, 
-                              delete_candidates, n_new_particles, n_current_particles, resize_buffer)
+                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, 
+                              n_new_particles, n_current_particles, resize_buffer)
 end
 
 # TODO:

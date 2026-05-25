@@ -81,7 +81,6 @@ struct WeaklyCompressibleSPHSystem{NDIMS, ELTYPE <: Real, IC, MA, P, DC, SE, K, 
     buffer                            :: B
     particle_refinement               :: PR # TODO
     cache                             :: C
-    particle_spacing                  :: PS
     smoothing_length                  :: SL
 end
 
@@ -163,7 +162,6 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
 
     (; particle_spacing) = initial_condition
     if !isnothing(particle_refinement)
-        particle_spacing = fill(particle_spacing, n_particles)
         smoothing_length = fill(smoothing_length, n_particles)
     end
 
@@ -173,7 +171,7 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
                                        density_diffusion, correction, pressure_acceleration,
                                        shifting_technique, source_terms, surface_tension,
                                        surface_normal_method, buffer, particle_refinement,
-                                       cache, particle_spacing, smoothing_length)
+                                       cache, smoothing_length)
 end
 
 function Base.show(io::IO, system::WeaklyCompressibleSPHSystem)
@@ -283,10 +281,6 @@ end
 
 @inline function current_pressure(v, system::WeaklyCompressibleSPHSystem)
     return system.pressure
-end
-
-@inline function current_particle_spacing(system::WeaklyCompressibleSPHSystem)
-    return system.particle_spacing
 end
 
 @inline function current_mass(system::WeaklyCompressibleSPHSystem)

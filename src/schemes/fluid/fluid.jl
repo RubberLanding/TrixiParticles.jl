@@ -48,7 +48,10 @@ end
     return u 
 end
 
-# TODO: Warning from above needed since we neither modify `v` nor `u`?
+@inline function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
+    current_mass(system)[particle] = mass
+end
+
 @inline function set_particle_smoothing_length!(system::AbstractFluidSystem, particle,
                                                 smoothing_length)
     set_particle_smoothing_length!(system, system.particle_refinement, particle,
@@ -61,32 +64,9 @@ end
 end
 
 @inline function set_particle_smoothing_length!(system::AbstractFluidSystem, ::Nothing,
-                                                particle, smoothing_length) end
-
-# TODO: Warning from above needed since we neither modify `v` nor `u`?
-@inline function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
-    set_particle_mass!(system, system.particle_refinement, particle, mass)
+                                                particle, smoothing_length) 
+    throw(ArgumentError("Cannot set per-particle smoothing length when particle refinement is disabled."))
 end
-
-@inline function set_particle_mass!(system::AbstractFluidSystem, refinement, particle, mass)
-    current_mass(system)[particle] = mass
-end
-
-@inline function set_particle_mass!(system::AbstractFluidSystem, ::Nothing, particle, mass) end
-
-# TODO: Warning from above needed since we neither modify `v` nor `u`?
-@inline function set_particle_spacing!(system::AbstractFluidSystem, particle,
-                                       particle_spacing)
-    set_particle_spacing!(system, system.particle_refinement, particle, particle_spacing)
-end
-
-@inline function set_particle_spacing!(system::AbstractFluidSystem, refinement, particle,
-                                       particle_spacing)
-    particle_spacing(system)[particle] = particle_spacing
-end
-
-@inline function set_particle_spacing!(system::AbstractFluidSystem, ::Nothing, particle,
-                                       particle_spacing) end
 
 function create_cache_density(initial_condition, ::SummationDensity)
     density = similar(initial_condition.density)
@@ -103,12 +83,14 @@ end
     return system.mass[particle]
 end
 
+smoothing_length(system::AbstractFluidSystem) = system.smoothing_length
+
 function smoothing_length(system::AbstractFluidSystem, particle)
     return smoothing_length(system, system.particle_refinement, particle)
 end
 
 function smoothing_length(system::AbstractFluidSystem, ::Nothing, particle)
-    return system.smoothing_length
+    throw(ArgumentError("Cannot access per-particle smoothing length when particle refinement is disabled. Access the global smoothing length with `smoothing_length(system)` instead."))
 end
 
 function smoothing_length(system::AbstractFluidSystem, refinement, particle)

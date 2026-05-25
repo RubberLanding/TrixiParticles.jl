@@ -67,8 +67,11 @@ end
         # QUESTION: So we repeatedly overwrite the spacing for a particle? Do we want that?
         spacing_neighbor = TrixiParticles.particle_spacing(neighbor_system, neighbor)
         spacing_particle = TrixiParticles.particle_spacing(particle_system, particle)
-        set_particle_spacing!(particle_system, particle,
-                              min(spacing_neighbor, spacing_particle))
+
+        # Implicitely store the new particle spacing by updating the particle's smoothing length 
+        min_spacing = min(spacing_neighbor, spacing_particle)
+        min_smoothing_length = system.particle_refinement.smoothing_length_factor * min_spacing
+        set_particle_smoothing_length(system, particle, min_smoothing_length)
     end
 
     return particle_system
