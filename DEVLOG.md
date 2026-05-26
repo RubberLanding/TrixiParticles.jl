@@ -13,6 +13,7 @@
     - [] merge branch 
     - [] split branch 
 - Test with new branch that combines the resize and the merge/split branches
+- Remember to reset all the `_candidate`arrays before calling split and merge 
 
 ## 19.05.26
 - Do not directly merge the resize branch into the base branch
