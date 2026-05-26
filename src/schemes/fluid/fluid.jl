@@ -59,12 +59,12 @@ end
 end
 
 @inline function set_particle_smoothing_length!(system::AbstractFluidSystem, refinement,
-                                                particle, smoothing_length)
-    smoothing_length(system)[particle] = smoothing_length
+                                                particle, particle_smoothing_length)
+    smoothing_length(system)[particle] = particle_smoothing_length
 end
 
 @inline function set_particle_smoothing_length!(system::AbstractFluidSystem, ::Nothing,
-                                                particle, smoothing_length) 
+                                                particle, particle_smoothing_length) 
     throw(ArgumentError("Cannot set per-particle smoothing length when particle refinement is disabled."))
 end
 
@@ -83,7 +83,9 @@ end
     return system.mass[particle]
 end
 
-smoothing_length(system::AbstractFluidSystem) = system.smoothing_length
+function smoothing_length(system::AbstractFluidSystem)
+    return system.smoothing_length
+end 
 
 function smoothing_length(system::AbstractFluidSystem, particle)
     return smoothing_length(system, system.particle_refinement, particle)

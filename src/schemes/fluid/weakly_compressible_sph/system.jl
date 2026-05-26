@@ -62,7 +62,7 @@ See [Weakly Compressible SPH](@ref wcsph) for more details on the method.
 """
 struct WeaklyCompressibleSPHSystem{NDIMS, ELTYPE <: Real, IC, MA, P, DC, SE, K, V, DD, COR,
                                    PF, SC, ST, B, SRFT, SRFN, PR,
-                                   C, PS, SL} <: AbstractFluidSystem{NDIMS}
+                                   C, SL} <: AbstractFluidSystem{NDIMS}
     initial_condition                 :: IC
     mass                              :: MA     # Array{ELTYPE, 1}
     pressure                          :: P      # Array{ELTYPE, 1}
@@ -160,7 +160,6 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
                  reference_particle_spacing=reference_particle_spacing)
     end
 
-    (; particle_spacing) = initial_condition
     if !isnothing(particle_refinement)
         smoothing_length = fill(smoothing_length, n_particles)
     end

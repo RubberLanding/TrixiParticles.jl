@@ -9,8 +9,6 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     delete_candidates       :: BARRAY  
     split_candidates        :: IARRAY  
     merge_candidates        :: IARRAY  
-    n_new_particles         :: IARRAY 
-    n_current_particles     :: IARRAY
     resize_buffer           :: RB
 end
 
@@ -26,16 +24,16 @@ function ParticleRefinement(; n_particles, smoothing_length, initial_particle_sp
     split_candidates = Vector{Int}(undef, n_particles)
     merge_candidates = Vector{Int}(undef, n_particles)
 
-    n_new_particles = zeros(Int, 1)
-    n_current_particles = zeros(Int, 1)
-
     return ParticleRefinement(refinement_criteria, max_spacing_ratio, min_spacing, smoothing_length_factor,
                               splitting_pattern, delete_candidates, split_candidates, merge_candidates, 
-                              n_new_particles, n_current_particles, resize_buffer)
+                              resize_buffer)
 end
 
 # TODO:
 function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
+    # Reset the refinement before doing anything
+    reset_refinement!(semi)
+
     # Apply refinement criterion, e.g. for SpatialRefinementCriterion setting the spacing of particles near the boundary 
     apply_refinement_criteria!(semi, v_ode, u_ode)
 
@@ -79,6 +77,22 @@ function create_cache_refinement(initial_condition, refinement, initial_smoothin
 
     return (; reference_mass, _particle_spacing)
 end
+
+function reset_refinement!(semi)
+    foreach_system(semi) do system
+        reset_refinement!(system.particle_refinement, system)
+    end
+end 
+
+function reset_refinement!(refinement, system::AbstractFluidSystem)
+    (; delete_candidates, split_candidates, merge_candidates, resize_buffer) = refinement
+
+    fill!(delete_candidates, false)
+    fill!(split_candidates, false)
+    fill!(merge_candidates, false)
+
+    reset_resize_buffer!(resize_buffer, system) 
+end   
 
 # TODO 
 function reset_cache_refinement!(cache) end
