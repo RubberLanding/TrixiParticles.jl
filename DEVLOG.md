@@ -1,5 +1,8 @@
 ## DEVLOG - Branch: Refinement_ParticleSpacing
 
+## 27.05.26
+- [] TODO: Update the `Refinement_ParticleSpacing` branch to not use the particle spacing explitely and update the smoothing length instead 
+
 ## 25.05.26
 - [] Introduced `ResizeBuffer`, update unit tests and check code validity
 
