@@ -21,12 +21,12 @@ function ParticleRefinementCallback(; interval::Integer=-1, dt=0.0)
     if dt > 0
         # Add a `tstop` every `dt`, and save the final solution.
         return PeriodicCallback(refinement_callback, dt,
-                                initialize=(initial_update!),
+                                initialize=(initial_refinement!),
                                 save_positions=(false, false))
     else
         # The first one is the `condition`, the second the `affect!`
         return DiscreteCallback(refinement_callback, refinement_callback,
-                                initialize=(initial_update!),
+                                initialize=(initial_refinement!),
                                 save_positions=(false, false))
     end
 end
@@ -36,18 +36,11 @@ function initial_refinement!(cb, u, t, integrator)
     # The `ParticleRefinementCallback` is either `cb.affect!` (with `DiscreteCallback`)
     # or `cb.affect!.affect!` (with `PeriodicCallback`).
     # Let recursive dispatch handle this.
-
     initial_refinement!(cb.affect!, u, t, integrator)
 end
 
 function initial_refinement!(cb::ParticleRefinementCallback, u, t, integrator)
-    semi = integrator.p
-
-    # TODO
-    # foreach_system(semi) do system
-    #     resize_refinement!(system)
-    # end
-
+    
     cb(integrator)
 end
 
@@ -65,7 +58,7 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
     v_ode, u_ode = integrator.u.x
 
     # Update NHS
-    @trixi_timeit timer() "update nhs" update_nhs(u_ode, semi)
+    @trixi_timeit timer() "update nhs" update_nhs!(semi, u_ode)
 
     # Basically `get_tmp_cache(integrator)` to write into in order to be non-allocating
     # https://docs.sciml.ai/DiffEqDocs/stable/basics/integrator/#Caches
@@ -75,7 +68,7 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
     u_tmp .= u_ode
 
     # TODO
-    # refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
+    refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
 
     resize!(integrator, (length(v_ode), length(u_ode)))
 
@@ -126,10 +119,4 @@ function Base.show(io::IO, ::MIME"text/plain",
         ]
         summary_box(io, "ParticleRefinementCallback", setup)
     end
-end
-
-function Base.resize!(A::ArrayPartition, sizes::Tuple)
-    resize!.(A.x, sizes)
-
-    return A
 end
