@@ -15,27 +15,23 @@ end
 @inline apply_refinement_criteria!(system, v_ode, u_ode, semi) = system
 
 @inline function apply_refinement_criteria!(system::AbstractFluidSystem, v_ode, u_ode, semi)
-    v = wrap_v(v_ode, system, semi)
-    u = wrap_u(u_ode, system, semi)
-
-    apply_refinement_criteria!(system, system.particle_refinement, v, u, v_ode, u_ode, semi)
+    apply_refinement_criteria!(system, system.particle_refinement, v_ode, u_ode, semi)
 end
 
-@inline function apply_refinement_criteria!(system::AbstractFluidSystem, ::Nothing,
-                                            v, u, v_ode, u_ode, semi)
+@inline function apply_refinement_criteria!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi)
     system
 end
 
-@inline function apply_refinement_criteria!(system::AbstractFluidSystem, refinement,
-                                            v, u, v_ode, u_ode, semi)
+@inline function apply_refinement_criteria!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
     (; criteria) = system.particle_refinement
 
     for criterion in criteria
-        criterion(system, v, u, v_ode, u_ode, semi)
+        criterion(system, v_ode, u_ode, semi)
     end
 end
 
-@inline function (criterion::SpatialRefinementCriterion)(system, v, u, v_ode, u_ode, semi)
+@inline function (criterion::SpatialRefinementCriterion)(system, v_ode, u_ode, semi)
+    u = wrap_u(u_ode, system, semi)
     system_coords = current_coordinates(u, system)
 
     foreach_system(semi) do neighbor_system
@@ -70,8 +66,8 @@ end
 
         # Implicitely store the new particle spacing by updating the particle's smoothing length 
         min_spacing = min(spacing_neighbor, spacing_particle)
-        min_smoothing_length = system.particle_refinement.smoothing_length_factor * min_spacing
-        set_particle_smoothing_length(system, particle, min_smoothing_length)
+        min_smoothing_length = particle_system.particle_refinement.smoothing_length_factor * min_spacing
+        set_particle_smoothing_length!(particle_system, particle, min_smoothing_length)
     end
 
     return particle_system
