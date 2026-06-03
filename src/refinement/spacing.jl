@@ -13,22 +13,44 @@ end
 
 @inline update_particle_spacing(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
                                 semi) = system
-
+# Spacing
 # Update the reference spacing of all fluid particles
 @inline function update_particle_spacing(system::AbstractFluidSystem, refinement,
                                          v_ode, u_ode, semi)
-    (; particle_spacing) = system
-    (; max_spacing_ratio) = refinement
-    (; _particle_spacing, reference_mass) = system.cache
+    (; max_spacing_ratio, smoothing_length_factor, min_spacing) = refinement
+    (; _particle_spacing, reference_mass, is_anchor_particle) = system.cache
 
     u = wrap_u(u_ode, system, semi)
     v = wrap_v(v_ode, system, semi)
 
     system_coords = current_coordinates(u, system)
 
+    fill!(is_anchor_particle, false)
+
+    foreach_system(semi) do solid_system
+        # TODO: Extend this to other solid systems, e.g. moving systems like `TotalLagrangianSPHSystem` or `DEMSystem` 
+        if solid_system isa AbstractBoundarySystem
+            neighborhood_search = get_neighborhood_search(system, solid_system, semi)
+            u_solid = wrap_u(u_ode, solid_system, semi)
+            solid_coords = current_coordinates(u_solid, solid_system)
+
+            foreach_point_neighbor(system, solid_system, system_coords, solid_coords, semi) do fluid_particle, solid_particle, pos_diff, distance
+
+                # TODO: Check if this is needed
+                # # Lock the fluid particle's spacing
+                # _particle_spacing[fluid_particle] = min_spacing
+                # reference_mass[fluid_particle] = current_density(v, system, fluid_particle) * min_spacing^(ndims(system))
+
+                is_anchor_particle[fluid_particle] = true
+            end 
+        end
+    end
+
     for particle in eachparticle(system)
+        is_anchor_particle[particle] && continue
+
         spacing_min, spacing_max,
-        spacing_avg = min_max_avg_spacing(system, semi, system_coords,
+        spacing_avg = min_max_avg_spacing(system, semi, u_ode, system_coords,
                                           particle)
 
         if spacing_max / spacing_min < max_spacing_ratio^3
@@ -42,7 +64,10 @@ end
                                    new_spacing^(ndims(system))
     end
 
-    particle_spacing .= _particle_spacing
+    for particle in eachparticle(system)
+        particle_smoothing_length = _particle_spacing[particle] * smoothing_length_factor
+        set_particle_smoothing_length!(system, particle, particle_smoothing_length)
+    end
 
     return system
 end
@@ -54,8 +79,6 @@ end
     spacing_avg = zero(eltype(system))
     counter_neighbors = 0
 
-    # QUESTION: Should `neighbor_system` be limited to AbstractFluidSystem? 
-    # Why not just do a neighborhood search over all particles in `system` (see below)?
     foreach_system(semi) do neighbor_system
         neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
 
@@ -70,31 +93,6 @@ end
             spacing_avg += neighbor_spacing
             counter_neighbors += 1
         end
-    end
-
-    if counter_neighbors != 0
-        spacing_avg = spacing_avg / counter_neighbors
-    end
-
-    return spacing_min, spacing_max, spacing_avg
-end
-
-# Compute the minimum, maximum, and average reference spacing in the neighborhood around a particle
-# This only look for the neighbors of a particle within system. 
-@inline function min_max_avg_spacing(system, semi, system_coords, particle)
-    spacing_min = Inf
-    spacing_max = zero(eltype(system))
-    spacing_avg = zero(eltype(system))
-    counter_neighbors = 0
-
-    neighborhood_search = get_neighborhood_search(system, system, semi)
-    PointNeighbors.foreach_neighbor(system_coords, system_coords, neighborhood_search,
-                                    particle) do particle, neighbor, pos_diff, distance
-        neighbor_spacing = particle_spacing(system, neighbor)
-        spacing_min = min(spacing_min, neighbor_spacing)
-        spacing_max = max(spacing_max, neighbor_spacing)
-        spacing_avg += neighbor_spacing
-        counter_neighbors += 1
     end
 
     if counter_neighbors != 0
