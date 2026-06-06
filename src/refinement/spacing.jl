@@ -13,7 +13,6 @@ end
 
 @inline update_particle_spacing(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
                                 semi) = system
-# Spacing
 # Update the reference spacing of all fluid particles
 @inline function update_particle_spacing(system::AbstractFluidSystem, refinement,
                                          v_ode, u_ode, semi)
@@ -35,14 +34,10 @@ end
             solid_coords = current_coordinates(u_solid, solid_system)
 
             foreach_point_neighbor(system, solid_system, system_coords, solid_coords, semi) do fluid_particle, solid_particle, pos_diff, distance
-
-                # TODO: Check if this is needed
-                # # Lock the fluid particle's spacing
-                # _particle_spacing[fluid_particle] = min_spacing
-                # reference_mass[fluid_particle] = current_density(v, system, fluid_particle) * min_spacing^(ndims(system))
-
+                _particle_spacing[fluid_particle] = min_spacing
+                reference_mass[fluid_particle] = current_density(v, system, fluid_particle) * min_spacing^(ndims(system))
                 is_anchor_particle[fluid_particle] = true
-            end 
+            end
         end
     end
 

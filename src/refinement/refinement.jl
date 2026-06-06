@@ -1,6 +1,6 @@
 include("spacing.jl")
 include("refinement_criteria.jl")
-struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
+struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, FARRAY, RB}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     max_spacing_ratio       :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
@@ -11,6 +11,8 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     merge_candidates        :: IARRAY  
     candidate_flags         :: IARRAY
     candidate_offsets       :: IARRAY
+    neighbor_mass           :: FARRAY
+    neighbor_count          :: IARRAY
     resize_buffer           :: RB
     n_current_particles     :: IARRAY
 end
@@ -18,21 +20,27 @@ end
 function ParticleRefinement(; n_particles, smoothing_length, initial_particle_spacing,
                             max_spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
-                            splitting_pattern=nothing)
+                            splitting_pattern=nothing)                
     if !(refinement_criteria isa Tuple)
         refinement_criteria = (refinement_criteria,)
     end
 
-    delete_candidates = Vector{Bool}(undef, n_particles)
-    split_candidates = Vector{Bool}(undef, n_particles)
-    merge_candidates = Vector{Int}(undef, n_particles)
+    ELTYPE = typeof(min_spacing)
 
-    candidate_flags = Vector{Int}(undef, n_particles)
-    candidate_offsets = Vector{Int}(undef, n_particles)
+    # Use zeros(Bool, n) instead of falses(n) for thread safety
+    delete_candidates = zeros(Bool, n_particles)
+    split_candidates = zeros(Bool, n_particles)
+    
+    merge_candidates = zeros(Int, n_particles)
+    candidate_flags = zeros(Int, n_particles)
+    candidate_offsets = zeros(Int, n_particles)
 
+    neighbor_mass = zeros(ELTYPE, n_particles)
+    neighbor_count = zeros(Int, n_particles)
+    
     return ParticleRefinement(refinement_criteria, max_spacing_ratio, min_spacing, smoothing_length_factor,
                               splitting_pattern, delete_candidates, split_candidates, merge_candidates, candidate_flags, candidate_offsets, 
-                              resize_buffer, [n_particles])
+                              neighbor_mass, neighbor_count, resize_buffer, [n_particles])
 end
 
 # TODO
@@ -49,13 +57,11 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # Update the spacing of particles           (Algorithm 1)
         update_particle_spacing(system, v_ode, u_ode, semi)
 
-        # Split the particles                       (Algorithm 2)
-        split_particles!(system, v_ode, u_ode, semi)
+        # # Split the particles                     (Algorithm 2)
+        # split_particles!(system, v_ode, u_ode, semi)
 
         # TODO: Merge the particles                 (Algorithm 3)
-        # for _ in 1:3 
-        #     merge_particles!(system, v_ode, u_ode, semi)
-        # end
+        # merge_particles!(system, v_ode, u_ode, semi)
 
         update_nparticles_new!(system)
     end
@@ -71,16 +77,15 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # TODO: Resize neighborhood search
         # resize_nhs!()
 
+        # TODO: Update smoothing lengths
+        # update_smoothing_lengths()
+
         # TODO: Shift the particles
-        # for _ in 1:3
-        #     shift_particles!()
-        # end 
+        # shift_particles!()
         
         # TODO: Correct the particles
         # correct_particles()
 
-        # TODO: Update smoothing lengths
-        # update_smoothing_lengths()
     end
 
     return semi
@@ -123,16 +128,59 @@ function reset_refinement!(system::AbstractFluidSystem, ::Nothing, semi)
 end 
 
 function reset_refinement!(system::AbstractFluidSystem, refinement, semi)
-    (; delete_candidates, split_candidates, merge_candidates, candidate_flags, candidate_offsets, resize_buffer) = refinement
+    (; delete_candidates, split_candidates, merge_candidates, 
+       candidate_flags, candidate_offsets, neighbor_mass, neighbor_count, resize_buffer) = refinement
 
     fill!(delete_candidates, false)
     fill!(split_candidates, false)
     fill!(merge_candidates, false)
     fill!(candidate_flags, 0)
-    fill!(candidate_offsets, 0) 
+    fill!(candidate_offsets, 0)
+    fill!(neighbor_count, 0)
+    fill!(neighbor_mass, 0.0)
 
     reset_resize_buffer!(resize_buffer, system) 
 end   
 
 # TODO 
 function reset_cache_refinement!(cache) end
+
+@inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
+
+@inline function update_smoothing_lengths!(system::AbstractFluidSystem, v_ode, u_ode, semi)
+    return update_smoothing_lengths!(system, system.particle_refinement, v_ode, u_ode, semi)
+end
+
+@inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
+
+
+function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
+    (; neighbor_mass, neighbor_count, smoothing_length_factor) = refinement
+
+    u = wrap_u(u_ode, system, semi)
+    system_coords = current_coordinates(u, system)
+    set_zero!(neighbor_mass_sum)
+    set_zero!(neighbor_count)
+
+    ELTYPE = eltype(u)
+    inv_density = one(ELTYPE) / system.state_equation.reference_density
+    inv_ndims  = one(ELTYPE) / ndims(system)
+
+    # Calculate the total neighborhood mass around a particle 
+    foreach_point_neighbor(system, system, system_coords, system_coords,
+                           semi) do particle, neighbor, pos_diff, distance
+        neighbor_mass[particle] += hydrodynamic_mass(system, neighbor)
+        neighbor_count[particle] += 1
+    end 
+
+    # Update the smoothing length with the average neighborhood mass (Eq. 35)
+    @threaded semi for particle in eachindex(neighbor_mass_sum)
+        (delete_candidates[particle] || neighbor_count[particle] == 0) && return
+
+        avg_mass = neighbor_mass[particle] * (one(ELTYPE) / neighbor_count[particle])
+        new_smoothing_length = smoothing_length_factor * (inv_density * avg_mass)^inv_ndims
+        set_particle_smoothing_length!(system, particle, new_smoothing_length)
+    end
+
+    return system
+end
