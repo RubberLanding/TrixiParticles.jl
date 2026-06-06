@@ -119,5 +119,6 @@ export ColorfieldSurfaceNormal
 export SymplecticPositionVerlet
 export coordinates_eltype
 export ParticleRefinement, ResizeBuffer
+export CubicSplitting, TriangularSplitting, HexagonalSplitting
 
 end # module
