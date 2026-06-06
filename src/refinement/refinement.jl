@@ -1,5 +1,7 @@
 include("spacing.jl")
 include("refinement_criteria.jl")
+include("split_pattern.jl")
+include("splitting.jl")
 struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
@@ -16,7 +18,7 @@ end
 function ParticleRefinement(; n_particles,
                             spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
-                            splitting_pattern=nothing)                
+                            splitting_pattern=HexagonalSplitting())
     if !(refinement_criteria isa Tuple)
         refinement_criteria = (refinement_criteria,)
     end
