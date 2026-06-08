@@ -98,9 +98,9 @@ function apply_merging!(system::AbstractFluidSystem, refinement::ParticleRefinem
     @threaded semi for particle in eachindex(merge_candidates)
         candidate = merge_candidates[particle]
 
-        delete_candidates[particle] && continue 
-        candidate == 0 && continue
-        particle != merge_candidates[candidate] && continue
+        delete_candidates[particle] && return 
+        candidate == 0 && return
+        particle != merge_candidates[candidate] && return
 
         if particle < candidate
             m_a = hydrodynamic_mass(system, particle)
