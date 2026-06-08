@@ -50,7 +50,7 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # split_particles!(system, v_ode, u_ode, semi)
 
         # TODO: Merge the particles                 (Algorithm 3)
-        # merge_particles!(system, v_ode, u_ode, semi)
+        merge_particles!(system, v_ode, u_ode, semi)
 
         update_nparticles_new!(system)
     end

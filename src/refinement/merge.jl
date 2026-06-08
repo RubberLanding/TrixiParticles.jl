@@ -1,77 +1,49 @@
-function merge_particles!(semi, v_ode, u_ode, v_tmp, u_tmp)
+function merge_particles!(semi, v_ode, u_ode)
     foreach_system(semi) do system
-        v = wrap_v(v_ode, system, semi)
-        u = wrap_u(u_ode, system, semi)
+        merge_particles!(system, v_ode, u_ode, semi)
+    end 
 
-        merge_particles!(system, semi, v, u)
-    end
-
-    deleteat!(semi, v_ode, u_ode, v_tmp, u_tmp)
-
-    return semi
+    return semi 
 end
 
-@inline merge_particles!(system, semi, v, u) = system
+@inline merge_particles!(system, v_ode, u_ode, semi) = system
 
-@inline function merge_particles!(system::AbstractFluidSystem, semi, v, u)
-    return merge_particles!(system, system.particle_refinement, semi, v, u)
+@inline function merge_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi)
+    return merge_particles!(system, system.particle_refinement, v_ode, u_ode, semi)
 end
 
-@inline merge_particles!(system::AbstractFluidSystem, ::Nothing, semi, v, u) = system
+@inline merge_particles!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
 
-@inline function merge_particles!(system::AbstractFluidSystem, particle_refinement, semi, v, u)
-    (; delete_candidates, smoothing_length_factor, neighbor_mass_sum, neighbor_count ) = system.particle_refinement
-    ELTYPE = eltype(u)
-    inv_density = one(ELTYPE) / system.state_equation.reference_density
-    inv_ndims  = one(ELTYPE) / ndims(system)
+@inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi; merge_iter=3)
+    (; delete_candidates, candidate_flags) = refinement
+    (; n_delete_particles) = refinement.resize_buffer
 
+    v = wrap_v(v_ode, system, semi)
+    u = wrap_u(u_ode, system, semi)
+
+    # Reset delete candidates 
     @threaded semi for particle in eachindex(delete_candidates)
         delete_candidates[particle] = false
     end
 
-    # Merge particles iteratively
-    for _ in 1:3
-        merge_particles_inner!(system, particle_refinement, semi, v, u)
+    # Merge the particles
+    for _ in 1:merge_iter
+        collect_merge_candidates!(system, refinement, v, u, semi)
+        apply_merging!(system, refinement, v, u, semi)
     end
-
-    # TODO
-    # deleteat!(semi, ...)
-
-    neighborhood_search = get_neighborhood_search(system, semi)
-    system_coords = current_coordinates(u, system)
-    PointNeighbors.update!(neighborhood_search, system_coords, system_coords)
-
-    set_zero!(neighbor_mass_sum)
-    set_zero!(neighbor_count)
-
-    foreach_point_neighbor(system, system, system_coords, system_coords,
-                           semi) do particle, neighbor, pos_diff, distance
-        delete_candidates[particle] && return 
-        delete_candidates[neighbor] && return 
-
-        neighbor_mass_sum[particle] += hydrodynamic_mass(system, neighbor)
-        neighbor_count[particle] += 1
+    
+    # Update the counter for the particles to delete
+    @threaded semi for particle in eachparticle(system)
+        candidate_flags[particle] = delete_candidates[particle] ? 1 : 0
     end 
+    fill!(n_delete_particles, sum(candidate_flags))
 
-    @threaded semi for particle in eachindex(neighbor_mass_sum)
-        if delete_candidates[particle] || neighbor_count[particle] == 0
-            continue
-        end
+    return system 
+end 
 
-        avg_mass = neighbor_mass_sum[particle] * (one(ELTYPE) / neighbor_count[particle])
-        system.smoothing_length[particle] = smoothing_length_factor * (inv_density * avg_mass)^inv_ndims
-    end
-
-    return system
-end
-
-function merge_particles_inner!(system, particle_refinement, semi, v, u)
-    (; smoothing_kernel, cache) = system
-    (; max_spacing_ratio, merge_candidates, delete_candidates) = particle_refinement
-    (; reference_mass) = cache 
-
-    ELTYPE = eltype(u)
-    NDIMS = ndims(system)
+function collect_merge_candidates!(system::AbstractFluidSystem, refinement::ParticleRefinement, v, u, semi)
+    (; max_spacing_ratio, split_candidates, merge_candidates, delete_candidates) = refinement
+    (; reference_mass) = system.cache 
 
     set_zero!(merge_candidates)
     system_coords = current_coordinates(u, system)
@@ -79,31 +51,45 @@ function merge_particles_inner!(system, particle_refinement, semi, v, u)
     # Collect merge candidates
     foreach_point_neighbor(system, system, system_coords, system_coords,
                            semi) do particle, neighbor, pos_diff, distance
+        # Do not merge a particle that was split
+        split_candidates[particle] && return
+        split_candidates[neighbor] && return
+
+        # Do not merge a particle that was deleted
         delete_candidates[particle] && return
         delete_candidates[neighbor] && return
+
         particle == neighbor && return
 
         m_a = hydrodynamic_mass(system, particle)
         m_b = hydrodynamic_mass(system, neighbor)
         m_max = max_spacing_ratio * reference_mass[particle]
+        m_a > m_max && return 
 
-        if m_a <= m_max
-            m_merge = m_a + m_b
-            m_max_min = min(m_max, max_spacing_ratio * reference_mass[neighbor])
-            if m_merge < m_max_min
-                if merge_candidates[particle] == 0
-                    merge_candidates[particle] = neighbor
-                else
-                    stored_neighbor = current_coords(u, system, merge_candidates[particle])
-                    pos_diff_stored = stored_neighbor - current_coords(u, system, particle)
+        m_merge = m_a + m_b
+        m_max_min = min(m_max, max_spacing_ratio * reference_mass[neighbor])
+        m_merge >= m_max_min && return 
 
-                    if distance < norm(pos_diff_stored)
-                        merge_candidates[particle] = neighbor
-                    end
-                end
+        if merge_candidates[particle] == 0
+            merge_candidates[particle] = neighbor
+        else
+            stored_neighbor = current_coords(u, system, merge_candidates[particle])
+            pos_diff_stored = stored_neighbor - current_coords(u, system, particle)
+
+            if distance < norm(pos_diff_stored)
+                merge_candidates[particle] = neighbor
             end
         end
     end
+end
+
+function apply_merging!(system::AbstractFluidSystem, refinement::ParticleRefinement, v, u, semi)
+    (; smoothing_kernel, cache) = system
+    (; merge_candidates, delete_candidates) = refinement
+    (; reference_mass) = cache 
+
+    ELTYPE = eltype(u)
+    NDIMS = ndims(system)
 
     inv_ndims = one(ELTYPE) / NDIMS
     kernel_0_1 = kernel(smoothing_kernel, zero(ELTYPE), one(ELTYPE))
@@ -113,55 +99,53 @@ function merge_particles_inner!(system, particle_refinement, semi, v, u)
         candidate = merge_candidates[particle]
 
         delete_candidates[particle] && continue 
-        delete_candidates[candidate] && continue 
+        candidate == 0 && continue
+        particle != merge_candidates[candidate] && continue
 
-        if candidate != 0
-            if particle == merge_candidates[candidate]
-                if particle < candidate
-                    m_a = hydrodynamic_mass(system, particle)
-                    m_b = hydrodynamic_mass(system, candidate)
+        if particle < candidate
+            m_a = hydrodynamic_mass(system, particle)
+            m_b = hydrodynamic_mass(system, candidate)
 
-                    m_merge = m_a + m_b
+            m_merge = m_a + m_b
 
-                    pos_a = current_coords(u, system, particle)
-                    pos_b = current_coords(u, system, candidate)
+            pos_a = current_coords(u, system, particle)
+            pos_b = current_coords(u, system, candidate)
 
-                    vel_a = current_velocity(v, system, particle)
-                    vel_b = current_velocity(v, system, candidate)
+            vel_a = current_velocity(v, system, particle)
+            vel_b = current_velocity(v, system, candidate)
 
-                    pos_merge = (m_a * pos_a + m_b * pos_b) / m_merge
-                    vel_merge = (m_a * vel_a + m_b * vel_b) / m_merge
+            pos_merge = (m_a * pos_a + m_b * pos_b) / m_merge
+            vel_merge = (m_a * vel_a + m_b * vel_b) / m_merge
 
-                    # Update position and velocity
-                    set_particle_velocity!(v, system, particle, vel_merge)
-                    set_particle_position!(u, system, particle, pos_merge)
+            # Update position and velocity
+            set_particle_position!(u, system, particle, pos_merge) # (Eq. 32)
+            set_particle_velocity!(v, system, particle, vel_merge) # (Eq. 33)
 
-                    # Update smoothing length 
-                    h_a = smoothing_length(system, particle)
-                    h_b = smoothing_length(system, candidate)
-                    tmp_m = m_merge * kernel_0_1 
-                    tmp_a = m_a * kernel(smoothing_kernel, norm(pos_merge - pos_a), h_a)
-                    tmp_b = m_b * kernel(smoothing_kernel, norm(pos_merge - pos_b), h_b)
-                    smoothing_length_merge = (tmp_m / (tmp_a + tmp_b))^inv_ndims
+            # Update smoothing length 
+            h_a = smoothing_length(system, particle)
+            h_b = smoothing_length(system, candidate)
+            tmp_m = m_merge * kernel_0_1 
+            tmp_a = m_a * kernel(smoothing_kernel, norm(pos_merge - pos_a), h_a)
+            tmp_b = m_b * kernel(smoothing_kernel, norm(pos_merge - pos_b), h_b)
+            smoothing_length_merge = (tmp_m / (tmp_a + tmp_b))^inv_ndims
 
-                    set_particle_smoothing_length!(system, particle, smoothing_length_merge)
+            set_particle_smoothing_length!(system, particle, smoothing_length_merge) # (Eq. 34)
 
-                    # Update mass
-                    set_particle_mass!(system, particle, m_merge)
+            # Update mass
+            set_particle_mass!(system, particle, m_merge)
 
-                    # Update reference mass
-                    reference_mass[particle] += reference_mass[particle] + reference_mass[candidate]
+            # Update reference mass
+            reference_mass[particle] += reference_mass[candidate]
 
-                else
-                    # Disable the particle to be deleted
-                    delete_candidates[particle] = true
-                    set_particle_mass!(system, candidate, zero(ELTYPE))
-                    set_particle_velocity(v, system, candidate, zero(ELTYPE))
-                    set_particle_position(u, system, candidate, typemax(ELTYPE))
-                end
-            end
+        else
+            # Disable the particle to be deleted
+            delete_candidates[particle] = true
+            set_particle_mass!(system, particle, zero(ELTYPE))
+            set_particle_velocity!(v, system, particle, zero(ELTYPE))
+            set_particle_position!(u, system, particle, typemax(ELTYPE))
         end
     end
 
     return system
 end
+
