@@ -285,3 +285,9 @@ function Base.similar(::Broadcast.Broadcasted{ThreadedBroadcastStyle{P}},
     # TODO we only have the type `P` here and just assume that we can do `P()`
     return ThreadedBroadcastArray(similar(Array{T}, dims), parallelization_backend=P())
 end
+
+function Base.resize!(A::ThreadedBroadcastArray, length::Int)
+    resize!(A.array, length)
+
+    return A
+end
