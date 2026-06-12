@@ -147,8 +147,7 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
                                          n_particles)...,
              create_cache_surface_tension(surface_tension, ELTYPE, NDIMS,
                                           n_particles)...,
-             create_cache_refinement(initial_condition, particle_refinement,
-                                     smoothing_length)...,
+             create_cache_refinement(initial_condition, particle_refinement)...,
              create_cache_shifting(initial_condition, shifting_technique)...,
              color=Int(color_value))
 

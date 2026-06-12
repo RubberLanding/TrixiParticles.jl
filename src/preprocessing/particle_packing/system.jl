@@ -155,7 +155,7 @@ function ParticlePackingSystem(shape::InitialCondition;
         shift_length = place_on_shell ? zero(ELTYPE) : shape.particle_spacing / 2
     end
 
-    cache = (; create_cache_refinement(shape, particle_refinement, smoothing_length)...)
+    cache = (;)
 
     advection_velocity = copy(shape.velocity)
 

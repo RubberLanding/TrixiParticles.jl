@@ -14,7 +14,7 @@
     refinement = ParticleRefinement(n_particles=n_particles,
                                     smoothing_length=smoothing_length,
                                     initial_particle_spacing=particle_spacing,
-                                    max_spacing_ratio=1.05,
+                                    spacing_ratio=1.05,
                                     min_spacing=particle_spacing)
 
     tank = RectangularTank(particle_spacing, (width, height), (width, height),

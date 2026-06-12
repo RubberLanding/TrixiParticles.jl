@@ -125,9 +125,7 @@ function ImplicitIncompressibleSPHSystem(initial_condition,
     sum_term = zeros(ELTYPE, n_particles)
     density_error = zeros(ELTYPE, n_particles)
 
-    cache = (;
-             create_cache_refinement(initial_condition, particle_refinement,
-                                     smoothing_length)...,)
+    cache = (;)
 
     return ImplicitIncompressibleSPHSystem(initial_condition, mass, pressure,
                                            smoothing_kernel, smoothing_length,

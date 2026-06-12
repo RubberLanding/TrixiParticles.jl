@@ -16,7 +16,7 @@ end
 # Update the reference spacing of all fluid particles
 @inline function update_particle_spacing(system::AbstractFluidSystem, refinement,
                                          v_ode, u_ode, semi)
-    (; max_spacing_ratio, smoothing_length_factor, min_spacing) = refinement
+    (; spacing_ratio, smoothing_length_factor, min_spacing) = refinement
     (; _particle_spacing, reference_mass, is_anchor_particle) = system.cache
 
     u = wrap_u(u_ode, system, semi)
@@ -48,8 +48,8 @@ end
         spacing_avg = min_max_avg_spacing(system, semi, u_ode, system_coords,
                                           particle)
 
-        if spacing_max / spacing_min < max_spacing_ratio^3
-            new_spacing = min(spacing_max, max_spacing_ratio * spacing_min)
+        if spacing_max / spacing_min < spacing_ratio^3
+            new_spacing = min(spacing_max, spacing_ratio * spacing_min)
         else
             new_spacing = spacing_avg
         end

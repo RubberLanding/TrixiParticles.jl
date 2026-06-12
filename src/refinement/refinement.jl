@@ -2,23 +2,19 @@ include("spacing.jl")
 include("refinement_criteria.jl")
 struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, FARRAY, RB}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
-    max_spacing_ratio       :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
+    spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
     smoothing_length_factor :: ELTYPE    # Constant corresponding to the value of smoothing length factor (= smoothing_length / particle_spacing) used in the simulation, see Eq. 35 for the merging proceduce
     splitting_pattern       :: SP
     delete_candidates       :: BARRAY  
     split_candidates        :: BARRAY  
     merge_candidates        :: IARRAY  
-    candidate_flags         :: IARRAY
-    candidate_offsets       :: IARRAY
-    neighbor_mass           :: FARRAY
-    neighbor_count          :: IARRAY
     resize_buffer           :: RB
     n_current_particles     :: IARRAY
 end
 
-function ParticleRefinement(; n_particles, smoothing_length, initial_particle_spacing,
-                            max_spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
+function ParticleRefinement(; n_particles,
+                            spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
                             splitting_pattern=nothing)                
     if !(refinement_criteria isa Tuple)
@@ -30,17 +26,10 @@ function ParticleRefinement(; n_particles, smoothing_length, initial_particle_sp
     # Use zeros(Bool, n) instead of falses(n) for thread safety
     delete_candidates = zeros(Bool, n_particles)
     split_candidates = zeros(Bool, n_particles)
-    
     merge_candidates = zeros(Int, n_particles)
-    candidate_flags = zeros(Int, n_particles)
-    candidate_offsets = zeros(Int, n_particles)
-
-    neighbor_mass = zeros(ELTYPE, n_particles)
-    neighbor_count = zeros(Int, n_particles)
     
-    return ParticleRefinement(refinement_criteria, max_spacing_ratio, min_spacing, smoothing_length_factor,
-                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, candidate_flags, candidate_offsets, 
-                              neighbor_mass, neighbor_count, resize_buffer, [n_particles])
+    return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing, smoothing_length_factor,
+                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, resize_buffer, [n_particles])
 end
 
 # TODO
@@ -92,13 +81,13 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
 end
 
 # TODO
-function create_cache_refinement(initial_condition, ::Nothing, initial_smoothing_length)
+function create_cache_refinement(initial_condition, ::Nothing)
     return (;)
 end
 
 # TODO
 # If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
-function create_cache_refinement(initial_condition, refinement, initial_smoothing_length)
+function create_cache_refinement(initial_condition, refinement)
     n_particles = length(initial_condition.mass)
     ELTYPE = eltype(initial_condition)
 
@@ -106,7 +95,15 @@ function create_cache_refinement(initial_condition, refinement, initial_smoothin
     _particle_spacing = zeros(ELTYPE, n_particles)
     is_anchor_particle = falses(n_particles)
 
-    return (; reference_mass, _particle_spacing, is_anchor_particle)
+    candidate_flags = zeros(Int, n_particles)
+    candidate_offsets = zeros(Int, n_particles)
+
+    neighbor_mass = zeros(ELTYPE, n_particles)
+    neighbor_count = zeros(Int, n_particles)
+
+    return (; reference_mass, _particle_spacing, is_anchor_particle,
+            candidate_flags, candidate_offsets,
+            neighbor_mass, neighbor_count)
 end
 
 function reset_refinement!(semi)
@@ -128,22 +125,33 @@ function reset_refinement!(system::AbstractFluidSystem, ::Nothing, semi)
 end 
 
 function reset_refinement!(system::AbstractFluidSystem, refinement, semi)
-    (; delete_candidates, split_candidates, merge_candidates, 
-       candidate_flags, candidate_offsets, neighbor_mass, neighbor_count, resize_buffer) = refinement
+    (; delete_candidates, split_candidates, merge_candidates, resize_buffer) = refinement
 
     fill!(delete_candidates, false)
     fill!(split_candidates, false)
-    fill!(merge_candidates, false)
-    fill!(candidate_flags, 0)
-    fill!(candidate_offsets, 0)
-    fill!(neighbor_count, 0)
-    fill!(neighbor_mass, 0.0)
+    fill!(merge_candidates, 0)
 
     reset_resize_buffer!(resize_buffer, system) 
+    reset_cache_refinement!(system.cache)
+
+    return system
 end   
 
 # TODO 
-function reset_cache_refinement!(cache) end
+function reset_cache_refinement!(cache) 
+    (; reference_mass, _particle_spacing, is_anchor_particle, candidate_flags, candidate_offsets, neighbor_count, neighbor_mass) = cache 
+    ELTYPE = eltype(reference_mass)
+
+    fill!(reference_mass, zero(ELTYPE))
+    fill!(_particle_spacing, zero(ELTYPE))
+    fill!(is_anchor_particle, false)
+
+    fill!(candidate_flags, 0)
+    fill!(candidate_offsets, 0)
+
+    fill!(neighbor_count, 0)
+    fill!(neighbor_mass, zero(ELTYPE))
+end
 
 @inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
 
