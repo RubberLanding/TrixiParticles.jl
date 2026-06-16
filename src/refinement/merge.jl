@@ -41,7 +41,7 @@ end
     return system 
 end 
 
-function collect_merge_candidates!(system::AbstractFluidSystem, refinement::ParticleRefinement, v, u, semi)
+function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi)
     (; max_spacing_ratio, split_candidates, merge_candidates, delete_candidates) = refinement
     (; reference_mass) = system.cache 
 
@@ -69,7 +69,7 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement::Part
         m_merge = m_a + m_b
         m_max_min = min(m_max, max_spacing_ratio * reference_mass[neighbor])
         m_merge >= m_max_min && return 
-
+        
         if merge_candidates[particle] == 0
             merge_candidates[particle] = neighbor
         else
@@ -83,7 +83,7 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement::Part
     end
 end
 
-function apply_merging!(system::AbstractFluidSystem, refinement::ParticleRefinement, v, u, semi)
+function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     (; smoothing_kernel, cache) = system
     (; merge_candidates, delete_candidates) = refinement
     (; reference_mass) = cache 
@@ -93,6 +93,10 @@ function apply_merging!(system::AbstractFluidSystem, refinement::ParticleRefinem
 
     inv_ndims = one(ELTYPE) / NDIMS
     kernel_0_1 = kernel(smoothing_kernel, zero(ELTYPE), one(ELTYPE))
+
+    delete_mass = zero(ELTYPE)
+    delete_velocity = zero(SVector{NDIMS, ELTYPE})
+    delete_position = SVector{NDIMS, ELTYPE}(ntuple(_ -> typemax(ELTYPE), NDIMS))
 
     # Merge and delete particles
     @threaded semi for particle in eachindex(merge_candidates)
@@ -140,9 +144,9 @@ function apply_merging!(system::AbstractFluidSystem, refinement::ParticleRefinem
         else
             # Disable the particle to be deleted
             delete_candidates[particle] = true
-            set_particle_mass!(system, particle, zero(ELTYPE))
-            set_particle_velocity!(v, system, particle, zero(ELTYPE))
-            set_particle_position!(u, system, particle, typemax(ELTYPE))
+            set_particle_mass!(system, particle, delete_mass)
+            set_particle_velocity!(v, system, particle, delete_velocity)
+            set_particle_position!(u, system, particle, delete_position)
         end
     end
 

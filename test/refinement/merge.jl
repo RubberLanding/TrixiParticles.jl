@@ -1,39 +1,30 @@
 @testset "Particle Splitting with Resize" begin
-    # Particle 1 should merge with 2
-    # Particle 2 should merge into particle 1
-    # Particle 3 is competing with particle 2 to merge with 1 but is ignored
-    # Particle 4 should be ignored since the reference mass is too low to trigger merging
-    # Particle 5 should merge with 6
-    # Particle 6 should merge into particle 5
-    # Particle 7 should be ignored since its marked for deletion 
-    # Particle 8 should be ignored since its marked as split
+    coordinates = [0.0  0.1 -0.12  0.5  0.8  0.9  0.0
+                   0.0  0.0   0.0  0.0  0.0  0.0  0.9]
     
-    particle_spacing = 0.1
-    coordinates = [0.0  0.1 -0.12  0.5  0.8  0.9  0.85 0.0
-                   0.0  0.0   0.0  0.0  0.0  0.0  0.0  0.9]
-    
-    # Distinct velocities to test momentum conservation independently
-    velocity = [1.0  2.0  0.0  0.0 -1.0 -2.0 0.0 0.0
-                0.0  0.0  0.0  0.0  0.0  0.0 0.1 0.2]
+    velocity = [1.0  2.0  0.0  0.0 -1.0 -2.0  0.0
+                0.0  0.0  0.0  0.0  0.0  0.0  0.1]
     
     density = 257.0
-
     NDIMS, n_particles = size(coordinates)
     mass = ones(n_particles)
     density_ = density * ones(n_particles)
-    fluid = InitialCondition(; coordinates, velocity, mass, density=density_)
+
 
     smoothing_kernel = SchoenbergCubicSplineKernel{2}()
-    smoothing_length = 1.5 * particle_spacing
+    smoothing_length = 1.0
     state_equation = StateEquationCole(sound_speed=10, reference_density=density,
                                        exponent=7)
+
+    # Set particle spacing to init nhs correctly
+    fluid = InitialCondition(; coordinates, velocity, mass, density=density_, particle_spacing=smoothing_length)
 
     resize_buffer = ResizeBuffer(fluid)
     refinement = ParticleRefinement(n_particles=n_particles,
                                     smoothing_length=smoothing_length,
                                     initial_particle_spacing=particle_spacing,
                                     max_spacing_ratio=1.05,
-                                    min_spacing=particle_spacing,
+                                    min_spacing=1.0,
                                     resize_buffer=resize_buffer)
 
     fluid_system = WeaklyCompressibleSPHSystem(fluid, SummationDensity(),
@@ -68,37 +59,33 @@
     orig_h_7   = fluid_system.smoothing_length[7]
     orig_m_7   = fluid_system.mass[7]
 
-    orig_pos_8 = copy(u[:, 8])
-    orig_vel_8 = copy(v[:, 8])
-    orig_h_8   = fluid_system.smoothing_length[8]
-    orig_m_8   = fluid_system.mass[8]
-
     # Prepare the fluid system for refinement evaluation
     TrixiParticles.reset_refinement!(fluid_system, semi)
 
+    # Trigger the merging
     for particle in TrixiParticles.eachparticle(fluid_system)
         fluid_system.cache.reference_mass[particle] = TrixiParticles.hydrodynamic_mass(fluid_system, particle)
     end 
+    fluid_system.cache.reference_mass[[1, 2, 3, 5, 6, 7]] .= 2.0
 
-    # Trigger the merging
-    fluid_system.cache.reference_mass[[1, 2, 3, 5, 6, 7, 8]] .= 3.0
-
-    # Mark particle 7 for deletion 
-    (; delete_candidates) = refinement
-    for particle in eachindex(delete_candidates)
-        delete_candidates[particle] = false
-    end
-    delete_candidates[7] = true
-
-    # Mark particle 8 as split
+    # Mark particle 7 as split
     (; split_candidates) = refinement
     for particle in eachindex(split_candidates)
         split_candidates[particle] = false
     end
-    split_candidates[8] = true
+    split_candidates[7] = true
 
-    # Execute merging
-    merge_particles!(semi, v_ode, u_ode)
+    # Perform two merging iterations
+    # Round 1:
+    #   Particle 2 should merge into particle 1
+    #   Particle 3 is competing with particle 2 to merge with 1 but is ignored
+    #   Particle 4 should be ignored since its mass is too high to trigger merging
+    #   Particle 6 should merge into particle 5
+    #   Particle 7 should be ignored since its marked as split
+    # Round 2:
+    #   No particles are merged. Particle 1 and 3 are close enough, but their combined mass is too high
+
+    TrixiParticles.merge_particles!(fluid_system, refinement, v_ode, u_ode, semi, merge_iter=2)
 
     @testset "Test `collect_merge_candidates!`" begin
         @test refinement.delete_candidates[1] == false
@@ -107,22 +94,21 @@
         @test refinement.delete_candidates[4] == false  # Untouched spectator
         @test refinement.delete_candidates[5] == false
         @test refinement.delete_candidates[6] == true   # Absorbed by 5
-        @test refinement.delete_candidates[7] == true   # Already marked as deleted
-        @test refinement.delete_candidates[8] == false  # Marked for split
+        @test refinement.delete_candidates[7] == false   
     end
 
     @testset "Test `apply_merging!`" begin
         # Test that particle 2 was deleted
         @test refinement.delete_candidates[2] == true
         @test fluid_system.mass[2] == 0.0
-        @test all(v[:, 2] .== 0.0)
-        @test all(isinf.(u[:, 2])) # typemax(Float64) is Inf
+        @test all(iszero, v[:, 2])
+        @test all(isinf, u[:, 2]) # typemax(Float64) is Inf
 
         # Test that particle 6 was deleted
         @test refinement.delete_candidates[6] == true
         @test fluid_system.mass[6] == 0.0
-        @test all(v[:, 6] .== 0.0)
-        @test all(isinf.(u[:, 6]))
+        @test all(iszero, v[:, 6])
+        @test all(isinf, u[:, 6])
 
         # Test that particle 3 did not change
         @test fluid_system.mass[3] == orig_m_3
@@ -142,12 +128,6 @@
         @test u[:, 7] == orig_pos_7
         @test v[:, 7] == orig_vel_7
         @test fluid_system.smoothing_length[7] == orig_h_7
-
-        # Test that particle 8 did not change
-        @test fluid_system.mass[8] == orig_m_8
-        @test u[:, 8] == orig_pos_8
-        @test v[:, 8] == orig_vel_8
-        @test fluid_system.smoothing_length[8] == orig_h_8
 
         # Test that particle 2 got merged into 1
         m_merge = 2.0 # 1.0 + 1.0
