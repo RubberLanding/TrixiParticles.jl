@@ -11,12 +11,13 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     merge_candidates        :: IARRAY  
     resize_buffer           :: RB
     n_current_particles     :: IARRAY
+    shifting_technique      :: SC
 end
 
 function ParticleRefinement(; n_particles,
                             spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
-                            splitting_pattern=nothing)                
+                            splitting_pattern=nothing, shifting_technique=ParticleShiftingTechniqueSun2017())                
     if !(refinement_criteria isa Tuple)
         refinement_criteria = (refinement_criteria,)
     end
@@ -29,7 +30,8 @@ function ParticleRefinement(; n_particles,
     merge_candidates = zeros(Int, n_particles)
     
     return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing, smoothing_length_factor,
-                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, resize_buffer, [n_particles])
+                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, resize_buffer, [n_particles],
+                              shifting_technique)
 end
 
 # TODO

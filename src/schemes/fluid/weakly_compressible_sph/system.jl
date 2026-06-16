@@ -148,7 +148,7 @@ function WeaklyCompressibleSPHSystem(initial_condition, density_calculator, stat
              create_cache_surface_tension(surface_tension, ELTYPE, NDIMS,
                                           n_particles)...,
              create_cache_refinement(initial_condition, particle_refinement)...,
-             create_cache_shifting(initial_condition, shifting_technique)...,
+             create_cache_shifting(initial_condition, shifting_technique, particle_refinement)...,
              color=Int(color_value))
 
     # If the `reference_density_spacing` is set calculate the `ideal_neighbor_count`
