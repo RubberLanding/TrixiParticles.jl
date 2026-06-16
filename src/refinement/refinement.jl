@@ -1,6 +1,6 @@
 include("spacing.jl")
 include("refinement_criteria.jl")
-struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, FARRAY, RB}
+struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
