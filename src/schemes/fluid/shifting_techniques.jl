@@ -492,6 +492,68 @@ end
     return system
 end
 
+@fastpow function update_shifting_inner!(system, refinement::ParticleRefinement,
+                                         v, u, v_ode, u_ode, semi)
+    (; cache, smoothing_kernel) = system
+    (; delta_v) = cache
+
+    set_zero!(delta_v)
+
+    v_max_ = v_max(refinement.shifting_technique, v, system)
+
+    foreach_system(semi) do neighbor_system
+        u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+        v_neighbor = wrap_v(v_ode, neighbor_system, semi)
+
+        system_coords = current_coordinates(u, system)
+        neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
+
+        foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords,
+                               semi;
+                               points=each_integrated_particle(system)) do particle,
+                                                                           neighbor,
+                                                                           pos_diff,
+                                                                           distance
+            m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
+            rho_a = @inbounds current_density(v, system, particle)
+            rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
+
+            h_a = smoothing_length(system, particle)
+            h_b = smoothing_length(neighbor_system, neighbor)
+            h = min(h_a, h_b)
+
+            dx = particle_spacing(system, particle)
+            Wdx = kernel(smoothing_kernel, dx, h)
+
+            kernel_weight = kernel(smoothing_kernel, distance, h)
+            grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h)
+
+            # Eq. 7 in Sun et al. (2017). R = 0.2 and n = 4 according to p. 29 below Eq. 9.
+            # According to the paper, CFL * Ma can be rewritten as Δt * v_max / h
+            # (see p. 29, right above Eq. 9), but this does not yield the same amount
+            # of shifting when scaling h.
+            # When setting CFL * Ma = Δt * v_max / (2 * Δx), PST works as expected
+            # for both small and large smoothing length factors.
+            # We need to scale
+            # - quadratically with the smoothing length,
+            # - linearly with the particle spacing,
+            # - linearly with the time step.
+            # See https://github.com/trixi-framework/TrixiParticles.jl/pull/834.
+            delta_v_ = -v_max_ * (2 * h)^2 / (2 * dx) * (1 + (kernel_weight / Wdx)^4 * 2 / 10) *
+                       m_b / (rho_a + rho_b) * grad_kernel
+
+            # Write into the buffer
+            for i in eachindex(delta_v_)
+                @inbounds delta_v[i, particle] += delta_v_[i]
+            end
+        end
+    end
+
+    modify_shifting_at_free_surfaces!(system, u, semi)
+
+    return system
+end
+
 # `ParticleShiftingTechnique{<:Any, false}` means `update_everystage=false`.
 # Only update shifting from callback if `update_everystage=false`.
 # Only apply shifting from callback if PST is to be applied in a callback

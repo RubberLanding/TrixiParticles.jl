@@ -35,7 +35,7 @@ function ParticleRefinement(; n_particles,
 end
 
 # TODO
-function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
+function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
 
     foreach_system(semi) do system
 
@@ -68,7 +68,7 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # update_smoothing_lengths()
 
         # TODO: Shift the particles
-        # shift_particles!()
+        shift_particles!(system, v_ode, u_ode, semi, integrator)
         
         # TODO: Correct the particles
         # correct_particles()
@@ -76,6 +76,25 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
     end
 
     return semi
+end
+
+@inline function shift_particles!(system, v_ode, u_ode, semi, integrator)
+    return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, integrator)
+end 
+
+@inline shift_particles!(system, ::Nothing, v_ode, u_ode, semi, integrator) = system 
+
+@inline function shift_particles!(system, refinement, v_ode, u_ode, semi, integrator)
+    (; shifting_technique) = refinement
+
+    v = wrap_v(v_ode, system, semi)
+    u = wrap_u(u_ode, system, semi)
+
+    update_shifting_inner!(system, refinement, v, u, v_ode, u_ode, semi)
+
+    apply_particle_shifting!(u_ode, shifting_technique, system, semi, integrator.dt)
+
+    return system
 end
 
 # TODO
@@ -110,9 +129,7 @@ function reset_refinement!(semi)
     end
 end 
 
-function reset_refinement!(system, semi) 
-    return system
-end 
+@inline reset_refinement!(system, semi) = system 
 
 function reset_refinement!(system::AbstractFluidSystem, semi)
     return reset_refinement!(system, system.particle_refinement, semi)
@@ -150,6 +167,8 @@ function reset_cache_refinement!(cache)
     fill!(neighbor_count, 0)
     fill!(neighbor_mass, zero(ELTYPE))
 end
+
+@inline shift_particles!()
 
 @inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
 
