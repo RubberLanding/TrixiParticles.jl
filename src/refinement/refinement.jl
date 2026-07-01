@@ -1,6 +1,6 @@
 include("spacing.jl")
 include("refinement_criteria.jl")
-struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
+struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB, SC}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
@@ -78,25 +78,6 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
     return semi
 end
 
-@inline function shift_particles!(system, v_ode, u_ode, semi, integrator)
-    return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, integrator)
-end 
-
-@inline shift_particles!(system, ::Nothing, v_ode, u_ode, semi, integrator) = system 
-
-@inline function shift_particles!(system, refinement, v_ode, u_ode, semi, integrator)
-    (; shifting_technique) = refinement
-
-    v = wrap_v(v_ode, system, semi)
-    u = wrap_u(u_ode, system, semi)
-
-    update_shifting_inner!(system, refinement, v, u, v_ode, u_ode, semi)
-
-    apply_particle_shifting!(u_ode, shifting_technique, system, semi, integrator.dt)
-
-    return system
-end
-
 # TODO
 function create_cache_refinement(initial_condition, ::Nothing)
     return (;)
@@ -105,8 +86,9 @@ end
 # TODO
 # If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
 function create_cache_refinement(initial_condition, refinement)
-    n_particles = length(initial_condition.mass)
+    n_particles = nparticles(initial_condition)
     ELTYPE = eltype(initial_condition)
+    NDIMS = ndims(initial_condition)
 
     reference_mass = zeros(ELTYPE, n_particles)
     _particle_spacing = zeros(ELTYPE, n_particles)
@@ -118,9 +100,12 @@ function create_cache_refinement(initial_condition, refinement)
     neighbor_mass = zeros(ELTYPE, n_particles)
     neighbor_count = zeros(Int, n_particles)
 
+    grad_density = zeros(ELTYPE, NDIMS, n_particles)
+    grad_velocity = zeros(ELTYPE, NDIMS, NDIMS, n_particles)
+
     return (; reference_mass, _particle_spacing, is_anchor_particle,
             candidate_flags, candidate_offsets,
-            neighbor_mass, neighbor_count)
+            neighbor_mass, neighbor_count, grad_density, grad_velocity)
 end
 
 function reset_refinement!(semi)
@@ -168,7 +153,6 @@ function reset_cache_refinement!(cache)
     fill!(neighbor_mass, zero(ELTYPE))
 end
 
-@inline shift_particles!()
 
 @inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
 
@@ -177,7 +161,6 @@ end
 end
 
 @inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
-
 
 function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
     (; neighbor_mass, neighbor_count, smoothing_length_factor) = refinement
@@ -209,4 +192,5 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
 
     return system
 end
+
 include("resize.jl")
