@@ -16,21 +16,30 @@ end
 end
 
 function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement, 
-                                  system, semi, dt)
+                                  system, semi, dt; theta=1.0)
     (; cache) = system
     (; delta_v, grad_velocity, grad_density) = cache
 
     u = wrap_u(u_ode, system, semi)
     v = wrap_v(v_ode, system, semi)
 
+    NDIMS = ndims(system)
+
     # Add δr from the cache to the current coordinates
     @threaded semi for particle in eachparticle(system)
-        for j in axes(delta_v, 2)
-            @inbounds u[j, particle] += dt * delta_v[j, particle]
-            @inbounds current_density(v, system)[particle] += dt * grad_density[j, particle]
+        for i in 1:NDIMS
+            # δr_i = dt * v_shift_i
+            dr_i = dt * delta_v[i, particle]
 
-            for i in axes(delta_v, 1)
-                @inbounds v[j, particle] += dt * grad_velocity[i, j, particle]
+            # Eq 36: r'_i = r_i + θ * δr_i
+            @inbounds u[i, particle] += theta * dr_i
+
+            # Eq 37 for ρ: ρ'_i = ρ_i + ∇ρ_i ⋅ δr_i
+            @inbounds current_density(v, system)[particle] += grad_density[i, particle] * dr_i 
+
+            for j in 1:NDIMS
+                # Eq 37 for v: v'_i = v_i + ∇v_i ⋅ δr_i
+                @inbounds v[j, particle] += grad_velocity[i, j, particle] * dr_i
             end
         end
     end

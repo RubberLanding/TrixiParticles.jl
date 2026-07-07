@@ -113,7 +113,7 @@ function smoothing_length(system::AbstractFluidSystem, particle)
 end
 
 function smoothing_length(system::AbstractFluidSystem, ::Nothing, particle)
-    throw(ArgumentError("Cannot access per-particle smoothing length when particle refinement is disabled. Access the global smoothing length with `smoothing_length(system)` instead."))
+    return system.smoothing_length
 end
 
 function smoothing_length(system::AbstractFluidSystem, refinement, particle)

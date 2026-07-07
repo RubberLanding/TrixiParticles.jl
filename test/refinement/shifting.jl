@@ -1,63 +1,122 @@
-@testset "Empiric Error Estimation" begin
+"""
+    Creates a uniform grid and manually displaces a single particle
+    to create a distortion. Shifting should detect this and push the
+    particle back to its original position.
+"""
+@testset "Generic Shifting" begin 
     particle_spacing = 0.1
     density = 1.0 
     particles_per_dim = 10
-    fluid_baseline = RectangularShape(particle_spacing, (particles_per_dim, particles_per_dim), (0.0, 0.0), density=density)
-    fluid_perturbed = RectangularShape(particle_spacing, (particles_per_dim, particles_per_dim), (0.0, 0.0), density=density)
+    NDIMS = 2
+    fluid = RectangularShape(particle_spacing, (particles_per_dim, particles_per_dim), (0.0, 0.0), density=density)
+    fluid.velocity .= 1.0
+
+    # Perturb a single particle in the center of the grid.
+    center_idx = particles_per_dim * Int(particles_per_dim / 2) + Int(particles_per_dim / 2)
+    pos_target = fluid.coordinates[:, center_idx]
+
+    # Push the particle Left (-) and Up (+)
+    perturbation_vec = [-0.2 * particle_spacing, 0.3 * particle_spacing]
+    fluid.coordinates[:, center_idx] += perturbation_vec
+
+    particle_spacing = 0.1 
+    smoothing_length = 1.5 * particle_spacing 
+    smoothing_kernel = SchoenbergCubicSplineKernel{2}()
+    state_equation = StateEquationCole(sound_speed=10.0, 
+                                       reference_density=density,
+                                       exponent=7)
+
+    shifting_technique = ParticleShiftingTechniqueSun2017()    
+    fluid_system = WeaklyCompressibleSPHSystem(fluid, SummationDensity(), 
+                                               state_equation, smoothing_kernel, 
+                                               smoothing_length, shifting_technique=shifting_technique)
+    fluid_system.cache.density .= fluid.density
+
+    semi = Semidiscretization(fluid_system)
+    ode = semidiscretize(semi, (0.0, 1.0))
+    dt = 0.001
+
+    v_ode, u_ode = ode.u0.x
+
+    v = TrixiParticles.wrap_v(v_ode, fluid_system, semi)
+    u = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
+
+    # Test whether the shifting pushes the perturbed particle back to its original position.
+    TrixiParticles.update_shifting_inner!(fluid_system, shifting_technique, v, u, v_ode, u_ode, semi)
+
+    (; delta_v) = fluid_system.cache
+    shifting_vec = delta_v[:, center_idx]
+
+    # Test that both vectors are pointing in opposite directions.
+    @test dot(shifting_vec, perturbation_vec) < 0.0
+
+    # Explicitly test the shifting pointing Right (+) and Down (-)
+    @test shifting_vec[1] > 0.0
+    @test shifting_vec[2] < 0.0
+end
+
+
+"""
+    Initializes a non-linear continuous field on a uniform grid. 
+    Verifies that the Jacobian is approximated correctly.Manually
+    shifts a single particle, applies the correction, and compares 
+    the particle's mutated property array directly to the analytical
+    field at the new position. 
+"""
+@testset "Property Correction with `ParticleRefinement`" begin 
+    particle_spacing = 0.1
+    density = 1.0 
+    particles_per_dim = 10
+    
+    # Define a non-linear continuous field over a uniform grid
+    fluid = RectangularShape(particle_spacing, (particles_per_dim, particles_per_dim), (0.0, 0.0), density=density)
+    fluid.velocity[1, :] = sin.(fluid.coordinates[1, :])
+    fluid.velocity[2, :] = cos.(fluid.coordinates[2, :])
 
     center_idx = particles_per_dim * Int(particles_per_dim / 2) + Int(particles_per_dim / 2)
-    fluid_perturbed.coordinates[1, center_idx] += 0.2 * particle_spacing
-    fluid_perturbed.coordinates[2, center_idx] += 0.2 * particle_spacing
+    pos_center = fluid.coordinates[:, center_idx]
+    
+    smoothing_length = 1.5 * particle_spacing 
+    smoothing_kernel = SchoenbergCubicSplineKernel{2}()
+    state_equation = StateEquationCole(sound_speed=10.0, reference_density=density, exponent=7)
 
-    function measure_error(fluid, idx)
-        (; coordinates) = fluid
-        n_particles = nparticles(fluid)
+    resize_buffer = ResizeBuffer(fluid)
+    refinement = ParticleRefinement(n_particles=length(fluid.mass), spacing_ratio=1.05, min_spacing=particle_spacing, resize_buffer=resize_buffer)
 
-        field = similar(fluid.coordinates)
-        field[1, :] = fluid.coordinates[1,:]
-        field[2, :] = fluid.coordinates[2,:]
+    fluid_system = WeaklyCompressibleSPHSystem(fluid, SummationDensity(), 
+                                               state_equation, smoothing_kernel, 
+                                               smoothing_length, particle_refinement=refinement)
+    fluid_system.cache.density .= fluid.density
 
-        smoothing_kernel = SchoenbergCubicSplineKernel{2}()
-        smoothing_length = 1.5 * particle_spacing 
-        state_equation = StateEquationCole(sound_speed=10.0,
-                                        reference_density=density,
-                                        exponent=7)
+    semi = Semidiscretization(fluid_system)
+    ode = semidiscretize(semi, (0.0, 1.0))
+    dt = 0.001
 
-        fluid_system = WeaklyCompressibleSPHSystem(fluid,
-                                            SummationDensity(),
-                                            state_equation,
-                                            smoothing_kernel,
-                                            smoothing_length)
-        semi = Semidiscretization(fluid_system)
-        _ = semidiscretize(semi, (0.0, 1.0)) 
+    v_ode, u_ode = ode.u0.x
+    v = TrixiParticles.wrap_v(v_ode, fluid_system, semi)
+    u = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
 
-        kernel_correction_coefficient = zeros(n_particles)
-        interpolated_field = zeros(size(field))
+    # Compare the approximated with the exact gradient
+    TrixiParticles.update_shifting_inner!(fluid_system, refinement, v, u, v_ode, u_ode, semi)
+    grad_reference = [[cos(pos_center[1]) 0.0]; [0.0 -sin(pos_center[2])]]
+    @test all(isapprox(fluid_system.cache.grad_velocity[:, :, center_idx], grad_reference, atol=5e-3))
 
-        TrixiParticles.foreach_point_neighbor(fluid_system, fluid_system, coordinates, coordinates,
-                            semi) do particle, neighbor, pos_diff, distance
-            rho_b = density
-            m_b = fluid_system.mass[neighbor]
-            volume = m_b / rho_b
-            kernel_weight = TrixiParticles.kernel(smoothing_kernel, distance, smoothing_length)
-            
-            kernel_correction_coefficient[particle] += volume * kernel_weight
-            
-            interpolated_field[1, particle] += volume * kernel_weight * field[1, neighbor]
-            interpolated_field[2, particle] += volume * kernel_weight * field[2, neighbor]
-        end
+    # Manually shift a single particle
+    perturbation_vec = [-0.2 * particle_spacing, 0.2 * particle_spacing]
+    pos_perturbed = fluid.coordinates[:, center_idx] + perturbation_vec
 
-        for particle in TrixiParticles.eachparticle(fluid_system)
-            # Assume kernel coefficients to be non-zero
-            interpolated_field[1, particle] /= kernel_correction_coefficient[particle]
-            interpolated_field[2, particle] /= kernel_correction_coefficient[particle]
-        end
+    # Only test the `center_idx` particle and inject the correct delta_v
+    fluid_system.cache.delta_v[:, :] .= 0.0
+    fluid_system.cache.delta_v[:, center_idx] = perturbation_vec ./ dt
+    
+    TrixiParticles.apply_particle_shifting!(u_ode, v_ode, refinement, fluid_system, semi, dt)
 
-        error = norm(field[:, idx] .- interpolated_field[:, idx])
+    # Test that the shifting correctly moved the particle 
+    @test u[1, center_idx] == pos_perturbed[1] 
+    @test u[2, center_idx] == pos_perturbed[2]
 
-        return error
-    end
-
-    error_baseline = println("Baseline Error: ", measure_error(fluid_baseline, center_idx))
-    error_perturbed = println("Perturbed Error: ", measure_error(fluid_perturbed, center_idx))
-end 
+    # Test the gradient correction 
+    vel_exact = [sin(pos_perturbed[1]), cos(pos_perturbed[2])]
+    error_correction = norm(v[:, center_idx] - vel_exact)
+    @test error_correction < 1e-3
+end

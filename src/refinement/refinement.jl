@@ -193,4 +193,5 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
     return system
 end
 
+include("shifting.jl")
 include("resize.jl")
