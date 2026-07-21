@@ -1,13 +1,12 @@
 struct ResizeBuffer{IArray, FArray}
-    n_add_particles          :: IArray
-    n_delete_particles       :: IArray
-    n_new_particles          :: IArray
-
-    masses_new               :: FArray
-    densities_new            :: FArray
-    smoothing_lengths_new    :: FArray
-    velocities_new           :: FArray
-    positions_new            :: FArray
+    n_add_particles       :: IArray
+    n_delete_particles    :: IArray
+    n_new_particles       :: IArray
+    masses_new            :: FArray
+    densities_new         :: FArray
+    smoothing_lengths_new :: FArray
+    velocities_new        :: FArray
+    positions_new         :: FArray
 end
 
 function ResizeBuffer(initial_condition)
@@ -34,21 +33,21 @@ end
 
 function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
     foreach_system(semi) do system
-        !isa(system, AbstractFluidSystem) && return 
-        isnothing(system.particle_refinement) && return 
+        !isa(system, AbstractFluidSystem) && return
+        isnothing(system.particle_refinement) && return
 
         refinement = system.particle_refinement
         (; n_new_particles, n_add_particles, n_delete_particles) = refinement.resize_buffer
-        (n_add_particles[1] >= n_delete_particles[1]) && return 
+        (n_add_particles[1] >= n_delete_particles[1]) && return
 
         v = wrap_v(v_ode, system, semi)
         u = wrap_u(u_ode, system, semi)
         overwrite_swap(system, v, u, n_new_particles[1])
     end
 
-    foreach_system(semi) do system 
-        !isa(system, AbstractFluidSystem) && return 
-        isnothing(system.particle_refinement) && return 
+    foreach_system(semi) do system
+        !isa(system, AbstractFluidSystem) && return
+        isnothing(system.particle_refinement) && return
 
         n_new = system.particle_refinement.resize_buffer.n_new_particles[1]
         resize!(system, n_new)
@@ -56,22 +55,22 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
 
     resize!(semi, v_ode, u_ode, _v_ode, _u_ode)
 
-    foreach_system(semi) do system 
-        !isa(system, AbstractFluidSystem) && return 
-        isnothing(system.particle_refinement) && return 
+    foreach_system(semi) do system
+        !isa(system, AbstractFluidSystem) && return
+        isnothing(system.particle_refinement) && return
 
         (; n_add_particles, n_delete_particles) = system.particle_refinement.resize_buffer
-        (n_add_particles[1] < n_delete_particles[1]) && return 
+        (n_add_particles[1] < n_delete_particles[1]) && return
 
         v = wrap_v(v_ode, system, semi)
         u = wrap_u(u_ode, system, semi)
         overwrite_append(system, v, u)
     end
 
-    foreach_system(semi) do system 
-        !isa(system, AbstractFluidSystem) && return 
-        isnothing(system.particle_refinement) && return 
-        
+    foreach_system(semi) do system
+        !isa(system, AbstractFluidSystem) && return
+        isnothing(system.particle_refinement) && return
+
         n_new = system.particle_refinement.resize_buffer.n_new_particles[1]
         fill!(system.particle_refinement.n_current_particles, n_new)
     end
@@ -188,12 +187,14 @@ function Base.resize!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
 
     # Calculate new ranges and sizes
     sizes_u_new = [u_nvariables(system) * nparticles_new(system)
-               for system in systems]
+                   for system in systems]
     sizes_v_new = [v_nvariables(system) * nparticles_new(system)
-               for system in systems]
+                   for system in systems]
 
-    ranges_u_new = [(sum(sizes_u_new[1:(i - 1)]) + 1):sum(sizes_u_new[1:i]) for i in eachindex(sizes_u_new)]
-    ranges_v_new = [(sum(sizes_v_new[1:(i - 1)]) + 1):sum(sizes_v_new[1:i]) for i in eachindex(sizes_v_new)]
+    ranges_u_new = [(sum(sizes_u_new[1:(i - 1)]) + 1):sum(sizes_u_new[1:i])
+                    for i in eachindex(sizes_u_new)]
+    ranges_v_new = [(sum(sizes_v_new[1:(i - 1)]) + 1):sum(sizes_v_new[1:i])
+                    for i in eachindex(sizes_v_new)]
 
     size_v_new, size_u_new = sum(sizes_v_new), sum(sizes_u_new)
 
@@ -243,19 +244,19 @@ end
 
 function Base.resize!(system::WeaklyCompressibleSPHSystem, refinement, n)
     (; mass, pressure, smoothing_length) = system
-    
+
     # Resize standard system properties
     resize!(mass, n)
     resize!(pressure, n)
     resize!(smoothing_length, n)
-    
+
     # Resize the Density
     resize_density!(system, n, system.density_calculator)
-    
+
     # Resize the Cache and Refinement tracking arrays
     resize_cache!(system, n)
     resize_refinement!(refinement, n)
-    
+
     return system
 end
 
@@ -274,13 +275,11 @@ end
 
 # TODO
 function resize_refinement!(refinement::ParticleRefinement, n)
-    (; delete_candidates, split_candidates, merge_candidates, candidate_flags, candidate_offsets) = refinement
+    (; delete_candidates, split_candidates, merge_candidates) = refinement
 
     resize!(delete_candidates, n)
     resize!(split_candidates, n)
     resize!(merge_candidates, n)
-    resize!(candidate_flags, n)
-    resize!(candidate_offsets, n)
 
     return refinement
 end
@@ -288,11 +287,16 @@ end
 # TODO
 # We need one of these for each type of cache (and for each type of `_FluidSystem`?)
 function resize_cache!(system::WeaklyCompressibleSPHSystem, n)
-    (; reference_mass, _particle_spacing, is_anchor_particle) = system.cache 
+    (; reference_mass, _particle_spacing, is_anchor_particle, candidate_flags,
+     candidate_offsets, neighbor_mass, neighbor_count) = system.cache
 
     resize!(reference_mass, n)
     resize!(_particle_spacing, n)
     resize!(is_anchor_particle, n)
+    resize!(candidate_flags, n)
+    resize!(candidate_offsets, n)
+    resize!(neighbor_mass, n)
+    resize!(neighbor_count, n)
 
     return system
 end

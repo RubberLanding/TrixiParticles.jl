@@ -1,4 +1,3 @@
-using OrdinaryDiffEq
 @testset "Test Resize for Systems and Semidiscretization" begin
     function create_test_system(n_particles_per_dim)
         particle_spacing = 0.1
@@ -15,9 +14,7 @@ using OrdinaryDiffEq
         n_particles = prod(tank.n_particles_per_dimension)
         buffer = ResizeBuffer(tank.fluid)
         refinement = ParticleRefinement(n_particles=n_particles,
-                                        smoothing_length=smoothing_length,
-                                        initial_particle_spacing=particle_spacing,
-                                        max_spacing_ratio=1.05,
+                                        spacing_ratio=1.05,
                                         min_spacing=particle_spacing,
                                         resize_buffer=buffer)
 
@@ -49,10 +46,8 @@ using OrdinaryDiffEq
                             boundary_system_expand, boundary_system_constant, boundary_system_shrink)
     ode = semidiscretize(semi, (0.0, 1.0))
 
-    integrator = init(ode, CarpenterKennedy2N54(williamson_condition=false), dt=0.01)
-
-    v_ode, u_ode = integrator.u.x
-    v_tmp, u_tmp = integrator.cache.tmp.x
+    v_ode, u_ode = ode.u0.x
+    v_tmp, u_tmp = similar.(ode.u0.x)    
     len_v_original, len_u_original = length(v_ode), length(u_ode)
 
     # Prepare shrinking system 
