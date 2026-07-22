@@ -49,10 +49,10 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # Update the spacing of particles           (Algorithm 1)
         update_particle_spacing(system, v_ode, u_ode, semi)
 
-        # # Split the particles                     (Algorithm 2)
-        # split_particles!(system, v_ode, u_ode, semi)
+        # Split the particles                       (Algorithm 2)
+        split_particles!(system, v_ode, u_ode, semi)
 
-        # TODO: Merge the particles                 (Algorithm 3)
+        # Merge the particles                       (Algorithm 3)
         merge_particles!(system, v_ode, u_ode, semi)
 
         update_nparticles_new!(system)
