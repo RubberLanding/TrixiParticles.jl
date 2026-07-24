@@ -50,6 +50,7 @@ include("util.jl")
 include("general/abstract_system.jl")
 include("general/general.jl")
 include("setups/setups.jl")
+include("refinement/refinement.jl")
 include("schemes/schemes.jl")
 # `neighborhood_search.jl` requires the system types to be defined
 include("general/neighborhood_search.jl")
@@ -76,7 +77,7 @@ export InfoCallback, SolutionSavingCallback, DensityReinitializationCallback,
        PostprocessCallback, StepsizeCallback, UpdateCallback, SteadyStateReachedCallback,
        SplitIntegrationCallback, MechanicalWorkCalculatorCallback,
        calculated_mechanical_work,
-       SortingCallback
+       SortingCallback, ParticleRefinementCallback
 export ContinuityDensity, SummationDensity
 export PenaltyForceGanzenmueller, TransportVelocityAdami, ParticleShiftingTechnique,
        ParticleShiftingTechniqueSun2017, ConsistentShiftingSun2019,
@@ -117,5 +118,6 @@ export SurfaceTensionAkinci, CohesionForceAkinci, SurfaceTensionMorris,
 export ColorfieldSurfaceNormal
 export SymplecticPositionVerlet
 export coordinates_eltype
+export ParticleRefinement
 
 end # module

@@ -21,6 +21,7 @@ Adapt.@adapt_structure OpenBoundarySystem
 Adapt.@adapt_structure DEMSystem
 Adapt.@adapt_structure BoundaryDEMSystem
 Adapt.@adapt_structure RCRWindkesselModel
+Adapt.@adapt_structure ParticleRefinement
 
 # This makes `@threaded semi for ...` use `semi.parallelization_backend` for parallelization
 @inline function PointNeighbors.parallel_foreach(f, iterator, semi::Semidiscretization)

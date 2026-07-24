@@ -20,6 +20,54 @@ end
     return v
 end
 
+# WARNING!
+# These functions are intended to be used internally to set the pressure
+# of newly activated particles in a callback.
+# DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
+# outside of callbacks.
+@inline function set_particle_velocity!(v, system::AbstractFluidSystem, particle, particle_velocity)
+    velocity = current_velocity(v, system) # Needed e.g. when using `ContinuityDensity`
+
+    for dim in 1:ndims(system)
+        velocity[dim, particle] = particle_velocity[dim]
+    end 
+
+    return v
+end
+
+# WARNING!
+# These functions are intended to be used internally to set the pressure
+# of newly activated particles in a callback.
+# DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
+# outside of callbacks.
+@inline function set_particle_position!(u, system::AbstractFluidSystem, particle, position)
+    for dim in 1:ndims(system)
+        u[dim, particle] = position[dim]
+    end 
+    
+    return u 
+end
+
+@inline function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
+    current_mass(system)[particle] = mass
+end
+
+@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, particle,
+                                                smoothing_length)
+    set_particle_smoothing_length!(system, system.particle_refinement, particle,
+                                   smoothing_length)
+end
+
+@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, refinement,
+                                                particle, particle_smoothing_length)
+    smoothing_length(system)[particle] = particle_smoothing_length
+end
+
+@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, ::Nothing,
+                                                particle, particle_smoothing_length) 
+    throw(ArgumentError("Cannot set per-particle smoothing length when particle refinement is disabled."))
+end
+
 function create_cache_density(initial_condition, ::SummationDensity)
     density = similar(initial_condition.density)
 
@@ -31,37 +79,35 @@ function create_cache_density(ic, ::ContinuityDensity)
     return (;)
 end
 
-function create_cache_refinement(initial_condition, ::Nothing, smoothing_length)
-    smoothing_length_factor = smoothing_length / initial_condition.particle_spacing
-    return (; smoothing_length, smoothing_length_factor)
-end
-
-# TODO
-function create_cache_refinement(initial_condition, refinement, smoothing_length)
-    # TODO: If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
-end
-
 @propagate_inbounds function hydrodynamic_mass(system::AbstractFluidSystem, particle)
     return system.mass[particle]
 end
+
+function smoothing_length(system::AbstractFluidSystem)
+    return system.smoothing_length
+end 
 
 function smoothing_length(system::AbstractFluidSystem, particle)
     return smoothing_length(system, system.particle_refinement, particle)
 end
 
 function smoothing_length(system::AbstractFluidSystem, ::Nothing, particle)
-    return system.cache.smoothing_length
+    throw(ArgumentError("Cannot access per-particle smoothing length when particle refinement is disabled. Access the global smoothing length with `smoothing_length(system)` instead."))
+end
+
+function smoothing_length(system::AbstractFluidSystem, refinement, particle)
+    return system.smoothing_length[particle]
 end
 
 function initial_smoothing_length(system::AbstractFluidSystem)
     return initial_smoothing_length(system, system.particle_refinement)
 end
 
-initial_smoothing_length(system, ::Nothing) = system.cache.smoothing_length
+initial_smoothing_length(system, ::Nothing) = system.smoothing_length
 
 function initial_smoothing_length(system, refinement)
     # TODO
-    return system.cache.initial_smoothing_length_factor *
+    return refinement.smoothing_length_factor *
            system.initial_condition.particle_spacing
 end
 
@@ -72,7 +118,7 @@ end
 @inline particle_spacing(system, ::Nothing, _) = system.initial_condition.particle_spacing
 
 @inline function particle_spacing(system, refinement, particle)
-    (; smoothing_length_factor) = system.cache
+    (; smoothing_length_factor) = refinement
     return smoothing_length(system, particle) / smoothing_length_factor
 end
 

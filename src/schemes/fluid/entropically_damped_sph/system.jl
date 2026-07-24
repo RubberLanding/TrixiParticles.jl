@@ -149,8 +149,6 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
                                          n_particles)...,
              create_cache_surface_tension(surface_tension, ELTYPE, NDIMS,
                                           n_particles)...,
-             create_cache_refinement(initial_condition, particle_refinement,
-                                     smoothing_length)...,
              create_cache_correction(correction, initial_condition.density, NDIMS,
                                      n_particles)...,
              # Per-system color tag for colorfield surface-normal logic and VTK output.

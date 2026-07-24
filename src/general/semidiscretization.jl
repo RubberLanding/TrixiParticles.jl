@@ -92,14 +92,7 @@ function Semidiscretization(systems::Union{AbstractSystem, Nothing}...;
     # Other checks might be added here later.
     check_configuration(systems, neighborhood_search)
 
-    sizes_u = [u_nvariables(system) * n_integrated_particles(system)
-               for system in systems]
-    ranges_u = Tuple((sum(sizes_u[1:(i - 1)]) + 1):sum(sizes_u[1:i])
-                     for i in eachindex(sizes_u))
-    sizes_v = [v_nvariables(system) * n_integrated_particles(system)
-               for system in systems]
-    ranges_v = Tuple((sum(sizes_v[1:(i - 1)]) + 1):sum(sizes_v[1:i])
-                     for i in eachindex(sizes_v))
+    ranges_v, ranges_u = ranges_vu(systems)
 
     # Create a n x n matrix of n neighborhood searches for each of the n systems.
     # We will need one neighborhood search for each pair of systems.
@@ -122,6 +115,24 @@ function Semidiscretization(systems::Union{AbstractSystem, Nothing}...;
     return Semidiscretization(systems, ranges_u, ranges_v, searches,
                               parallelization_backend, update_callback_used,
                               integrate_tlsph)
+end
+
+# Compute the size of the variables of each system
+function sizes_vu(systems)
+    sizes_u = [u_nvariables(system) * n_integrated_particles(system)
+               for system in systems]
+    sizes_v = [v_nvariables(system) * n_integrated_particles(system)
+               for system in systems]
+    return sizes_v, sizes_u
+end
+
+# Compute the ranges the variables of each system occupy
+function ranges_vu(systems)
+    sizes_v, sizes_u = sizes_vu(systems)
+    ranges_u = [(sum(sizes_u[1:(i - 1)]) + 1):sum(sizes_u[1:i]) for i in eachindex(sizes_u)]
+    ranges_v = [(sum(sizes_v[1:(i - 1)]) + 1):sum(sizes_v[1:i]) for i in eachindex(sizes_v)]
+
+    return ranges_v, ranges_u
 end
 
 # Inline show function e.g. Semidiscretization(neighborhood_search=...)
