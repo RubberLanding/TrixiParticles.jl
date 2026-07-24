@@ -3,7 +3,7 @@ include("refinement_criteria.jl")
 include("split_pattern.jl")
 include("splitting.jl")
 include("merge.jl")
-struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
+struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB, SC}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
@@ -14,12 +14,14 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     merge_candidates        :: IARRAY  
     resize_buffer           :: RB
     n_current_particles     :: IARRAY
+    shifting_technique      :: SC
 end
 
 function ParticleRefinement(; n_particles,
                             spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
-                            splitting_pattern=HexagonalSplitting())
+                            splitting_pattern=HexagonalSplitting(),
+                            shifting_technique=ParticleShiftingTechniqueSun2017())
     if !(refinement_criteria isa Tuple)
         refinement_criteria = (refinement_criteria,)
     end
@@ -32,11 +34,12 @@ function ParticleRefinement(; n_particles,
     merge_candidates = zeros(Int, n_particles)
     
     return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing, smoothing_length_factor,
-                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, resize_buffer, [n_particles])
+                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, resize_buffer, [n_particles],
+                              shifting_technique)
 end
 
 # TODO
-function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
+function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
 
     foreach_system(semi) do system
 
@@ -69,7 +72,7 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # update_smoothing_lengths()
 
         # TODO: Shift the particles
-        # shift_particles!()
+        shift_particles!(system, v_ode, u_ode, semi, integrator)
         
         # TODO: Correct the particles
         # correct_particles()
@@ -87,8 +90,9 @@ end
 # TODO
 # If refinement is not `Nothing` and `correction` is not `Nothing`, then throw an error
 function create_cache_refinement(initial_condition, refinement)
-    n_particles = length(initial_condition.mass)
+    n_particles = nparticles(initial_condition)
     ELTYPE = eltype(initial_condition)
+    NDIMS = ndims(initial_condition)
 
     reference_mass = zeros(ELTYPE, n_particles)
     _particle_spacing = zeros(ELTYPE, n_particles)
@@ -100,9 +104,12 @@ function create_cache_refinement(initial_condition, refinement)
     neighbor_mass = zeros(ELTYPE, n_particles)
     neighbor_count = zeros(Int, n_particles)
 
+    grad_density = zeros(ELTYPE, NDIMS, n_particles)
+    grad_velocity = zeros(ELTYPE, NDIMS, NDIMS, n_particles)
+
     return (; reference_mass, _particle_spacing, is_anchor_particle,
             candidate_flags, candidate_offsets,
-            neighbor_mass, neighbor_count)
+            neighbor_mass, neighbor_count, grad_density, grad_velocity)
 end
 
 function reset_refinement!(semi)
@@ -111,9 +118,7 @@ function reset_refinement!(semi)
     end
 end 
 
-function reset_refinement!(system, semi) 
-    return system
-end 
+@inline reset_refinement!(system, semi) = system 
 
 function reset_refinement!(system::AbstractFluidSystem, semi)
     return reset_refinement!(system, system.particle_refinement, semi)
@@ -152,6 +157,7 @@ function reset_cache_refinement!(cache)
     fill!(neighbor_mass, zero(ELTYPE))
 end
 
+
 @inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
 
 @inline function update_smoothing_lengths!(system::AbstractFluidSystem, v_ode, u_ode, semi)
@@ -159,7 +165,6 @@ end
 end
 
 @inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
-
 
 function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
     (; neighbor_mass, neighbor_count, smoothing_length_factor) = refinement
@@ -191,4 +196,6 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
 
     return system
 end
+
+include("shifting.jl")
 include("resize.jl")
