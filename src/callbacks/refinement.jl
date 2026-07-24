@@ -68,7 +68,7 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
     u_tmp .= u_ode
 
     # TODO
-    refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
+    refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
 
     resize!(integrator, (length(v_ode), length(u_ode)))
 

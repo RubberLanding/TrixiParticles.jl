@@ -14,13 +14,14 @@ requires_update_callback(::AbstractShiftingTechnique) = false
 # This is called from the `UpdateCallback`
 particle_shifting_from_callback!(u_ode, shifting, system, v_ode, semi, integrator) = u_ode
 
-create_cache_shifting(initial_condition, ::Nothing) = (;)
+function create_cache_shifting(initial_condition, shifting_technique, refinement)
+    if !isnothing(shifting_technique) || !isnothing(refinement)
+        delta_v = zeros(eltype(initial_condition), ndims(initial_condition),
+                        nparticles(initial_condition))
+        return (; delta_v)
+    end
 
-function create_cache_shifting(initial_condition, ::AbstractShiftingTechnique)
-    delta_v = zeros(eltype(initial_condition), ndims(initial_condition),
-                    nparticles(initial_condition))
-
-    return (; delta_v)
+    return (;)
 end
 
 # `δv` is the correction to the particle velocity due to the shifting.
