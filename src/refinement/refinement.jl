@@ -2,6 +2,7 @@ include("spacing.jl")
 include("refinement_criteria.jl")
 include("split_pattern.jl")
 include("splitting.jl")
+include("merge.jl")
 struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
@@ -52,7 +53,7 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         # split_particles!(system, v_ode, u_ode, semi)
 
         # TODO: Merge the particles                 (Algorithm 3)
-        # merge_particles!(system, v_ode, u_ode, semi)
+        merge_particles!(system, v_ode, u_ode, semi)
 
         update_nparticles_new!(system)
     end
