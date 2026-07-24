@@ -68,6 +68,27 @@ end
     throw(ArgumentError("Cannot set per-particle smoothing length when particle refinement is disabled."))
 end
 
+@inline nparticles_new(system::AbstractFluidSystem) = nparticles_new(system, system.particle_refinement)
+
+@inline nparticles_new(system::AbstractFluidSystem, ::Nothing) = n_integrated_particles(system)
+
+@inline nparticles_new(system::AbstractFluidSystem, refinement) = refinement.resize_buffer.n_new_particles[1]
+
+@inline update_nparticles_new!(system::AbstractFluidSystem) = update_nparticles_new!(system, system.particle_refinement)
+
+@inline update_nparticles_new!(system::AbstractFluidSystem, ::Nothing) = system
+
+@inline function update_nparticles_new!(system::AbstractFluidSystem, refinement)
+    (; n_current_particles, resize_buffer) = refinement
+    (; n_new_particles, n_add_particles, n_delete_particles) = resize_buffer
+
+    _n_new_particles = n_current_particles[1] + n_add_particles[1] - n_delete_particles[1]
+    fill!(n_new_particles, _n_new_particles)
+
+    return system 
+end
+ 
+
 function create_cache_density(initial_condition, ::SummationDensity)
     density = similar(initial_condition.density)
 

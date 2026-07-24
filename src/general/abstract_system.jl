@@ -216,3 +216,7 @@ end
 @inline @fastpow function ideal_neighbor_count(::Val{3}, particle_spacing, compact_support)
     return floor(Int, 4 // 3 * pi * compact_support^3 / particle_spacing^3)
 end
+
+@inline nparticles_new(system) = n_integrated_particles(system)
+
+@inline update_nparticles_new!(system) = system

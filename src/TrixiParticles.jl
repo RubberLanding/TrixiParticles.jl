@@ -50,7 +50,6 @@ include("util.jl")
 include("general/abstract_system.jl")
 include("general/general.jl")
 include("setups/setups.jl")
-include("refinement/refinement.jl")
 include("schemes/schemes.jl")
 # `neighborhood_search.jl` requires the system types to be defined
 include("general/neighborhood_search.jl")
@@ -60,6 +59,7 @@ include("callbacks/callbacks.jl")
 # Note that `semidiscretization.jl` depends on the system types and has to be
 # included separately. `gpu.jl` in turn depends on the semidiscretization type.
 include("general/semidiscretization.jl")
+include("refinement/refinement.jl")
 include("general/gpu.jl")
 include("preprocessing/preprocessing.jl")
 include("io/io.jl")
@@ -118,6 +118,6 @@ export SurfaceTensionAkinci, CohesionForceAkinci, SurfaceTensionMorris,
 export ColorfieldSurfaceNormal
 export SymplecticPositionVerlet
 export coordinates_eltype
-export ParticleRefinement
+export ParticleRefinement, ResizeBuffer
 
 end # module

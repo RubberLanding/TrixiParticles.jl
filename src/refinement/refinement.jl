@@ -55,14 +55,10 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, t)
         update_nparticles_new!(system)
     end
 
-    # # Resize the semidiscretization
-    # resize!(semi, v_ode, u_ode, v_tmp, u_tmp)
+    # Resize the semidiscretization and systems
+    resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
     foreach_system(semi) do system
-
-        # # Resize the systems
-        # resize!(system, v_ode, u_ode, semi) 
-
         # TODO: Resize neighborhood search
         # resize_nhs!()
 
@@ -192,3 +188,4 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
 
     return system
 end
+include("resize.jl")
