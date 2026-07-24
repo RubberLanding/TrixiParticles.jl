@@ -32,6 +32,8 @@ function ResizeBuffer(initial_condition)
 end
 
 function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
+    # In case the total number of particles in the system decreased, 
+    # swap the particles to be deleted to the end and resize the system. 
     foreach_system(semi) do system
         !isa(system, AbstractFluidSystem) && return
         isnothing(system.particle_refinement) && return
@@ -45,6 +47,7 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
         overwrite_swap(system, v, u, n_new_particles[1])
     end
 
+    # Resize the system buffers
     foreach_system(semi) do system
         !isa(system, AbstractFluidSystem) && return
         isnothing(system.particle_refinement) && return
@@ -53,8 +56,11 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
         resize!(system, n_new)
     end
 
+    # Resize v_ode, u_ode and the ranges of the Semidiscretization
     resize!(semi, v_ode, u_ode, _v_ode, _u_ode)
 
+    # In case the total number of particles in the system increases,
+    # append the new particles to the end. 
     foreach_system(semi) do system
         !isa(system, AbstractFluidSystem) && return
         isnothing(system.particle_refinement) && return
@@ -67,6 +73,7 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
         overwrite_append(system, v, u)
     end
 
+    # Update the current number of particles in the ResizeBuffer
     foreach_system(semi) do system
         !isa(system, AbstractFluidSystem) && return
         isnothing(system.particle_refinement) && return
@@ -75,7 +82,11 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
         fill!(system.particle_refinement.n_current_particles, n_new)
     end
 
-    return semi
+    # Resize the neighborhood searches in the Semidiscretization
+    new_semi = resize_semi(semi)
+    reinitialize_neighborhood_searches!(new_semi, u_ode)
+
+    return new_semi
 end
 
 # IMPORTANT: `indices_delete_particles` needs to be sorted
@@ -322,4 +333,57 @@ function reset_resize_buffer!(resize_buffer::ResizeBuffer, system::AbstractFluid
     fill!(positions_new, 0.0)
 
     return resize_buffer
+end
+
+function resize_semi(semi::Semidiscretization)
+    (; systems) = semi
+
+    new_searches = map(systems) do system
+        map(systems) do neighbor_system
+
+            # Bypass `get_neighborhood_search` for TLSPH.
+            # We do not refine TLSPH and do not want to modify its `self_interaction_nhs`.
+            # Instead we take the nhs stored in the semidiscretization and resize it. 
+            system_index = system_indices(system, semi)
+            neighbor_index = system_indices(neighbor_system, semi)
+
+            old_nhs = semi.neighborhood_searches[system_index][neighbor_index]
+            n_new = nparticles(neighbor_system)
+            copy_neighborhood_search(old_nhs, old_nhs.search_radius, n_new)
+        end
+    end
+
+    return Semidiscretization(systems, semi.ranges_u, semi.ranges_v, new_searches,
+                              semi.parallelization_backend, semi.update_callback_used,
+                              semi.integrate_tlsph)
+end
+function reinitialize_neighborhood_searches!(semi, u_ode)
+    foreach_system(semi) do system
+        foreach_system(semi) do neighbor
+            reinitialize_neighborhood_search!(semi, system, neighbor, u_ode)
+        end
+    end
+    return semi
+end
+
+function reinitialize_neighborhood_search!(semi, system, neighbor, u_ode)
+    u_system = wrap_u(u_ode, system, semi)
+    u_neighbor = wrap_u(u_ode, neighbor, semi)
+
+    # TODO Initialize after adapting to the GPU.
+    # Currently, this cannot use `semi.parallelization_backend`
+    # because data is still on the CPU.   
+    PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
+                               current_coords(u_system, system),
+                               current_coords(u_neighbor, neighbor),
+                               eachindex_y=each_active_particle(neighbor),
+                               parallelization_backend=PolyesterBackend())
+
+    return semi
+end
+
+function reinitialize_neighborhood_search!(semi, system::TotalLagrangianSPHSystem,
+                                           neighbor::TotalLagrangianSPHSystem, u_ode)
+    # For TLSPH, the self-interaction NHS is already initialized in the system constructor
+    return semi
 end

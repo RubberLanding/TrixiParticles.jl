@@ -61,25 +61,20 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
         update_nparticles_new!(system)
     end
 
-    # Resize the semidiscretization and systems
-    resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
+    # Resize the v_ode, u_ode, semidiscretization and systems
+    new_semi = resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
+    integrator.p = new_semi
 
-    foreach_system(semi) do system
-        # TODO: Resize neighborhood search
-        # resize_nhs!()
+    foreach_system(new_semi) do system
 
         # TODO: Update smoothing lengths
-        # update_smoothing_lengths()
+        update_smoothing_lengths!(system, v_ode, u_ode, new_semi)
 
-        # TODO: Shift the particles
-        shift_particles!(system, v_ode, u_ode, semi, integrator)
-        
-        # TODO: Correct the particles
-        # correct_particles()
-
+        # TODO: Shift the particles and correct the particle properties
+        shift_particles!(system, v_ode, u_ode, new_semi, integrator)
     end
 
-    return semi
+    return new_semi
 end
 
 # TODO
