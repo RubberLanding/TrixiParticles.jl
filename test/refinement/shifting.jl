@@ -46,7 +46,7 @@
     TrixiParticles.update_shifting_inner!(fluid_system, shifting_technique, v, u, v_ode,
                                           u_ode, semi)
 
-    (; delta_v) = fluid_system.cache
+    delta_v = reshape(fluid_system.cache.delta_v, ndims(fluid_system), :)
     shifting_vec = delta_v[:, center_idx]
 
     # Test that both vectors are pointing in opposite directions.

@@ -18,7 +18,8 @@
                                         min_spacing=particle_spacing,
                                         resize_buffer=buffer)
 
-        fluid_system = WeaklyCompressibleSPHSystem(tank.fluid, SummationDensity(),
+        density_calculator = SummationDensity()
+        fluid_system = WeaklyCompressibleSPHSystem(tank.fluid; density_calculator,
                                             state_equation, smoothing_kernel, smoothing_length,
                                             particle_refinement=refinement)
         boundary_model = BoundaryModelDummyParticles(tank.boundary.density,

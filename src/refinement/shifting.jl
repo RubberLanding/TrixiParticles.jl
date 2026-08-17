@@ -125,16 +125,19 @@ end
 
             # Write into the buffers
             for i in eachindex(delta_v_)
-                @inbounds delta_v[i, particle] += delta_v_[i]
+                idx = (particle - 1) * NDIMS + i
+                @inbounds delta_v[idx] += delta_v_[i]
             end
 
             for i in eachindex(grad_density_)
-                @inbounds grad_density[i, particle] += grad_density_[i]
+                idx = (particle - 1) * NDIMS + i
+                @inbounds grad_density[idx] += grad_density_[i]
             end 
 
             for j in axes(grad_velocity_, 2)
                 for i in axes(grad_velocity_, 1)
-                    @inbounds grad_velocity[i, j, particle] += grad_velocity_[i, j]
+                    idx_3d = (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
+                    @inbounds grad_velocity[idx_3d] += grad_velocity_[i, j]
                 end 
             end 
         end

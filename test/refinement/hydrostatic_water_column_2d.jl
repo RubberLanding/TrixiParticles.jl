@@ -6,7 +6,7 @@
 # ==========================================================================================
 
 using TrixiParticles
-using OrdinaryDiffEq
+using OrdinaryDiffEqLowStorageRK
 
 # ==========================================================================================
 # ==== Resolution
@@ -52,7 +52,7 @@ refinement = ParticleRefinement(n_particles=nparticles(fluid),
                                 min_spacing=1.0,
                                 resize_buffer=resize_buffer)
 
-fluid_system = WeaklyCompressibleSPHSystem(fluid, fluid_density_calculator,
+fluid_system = WeaklyCompressibleSPHSystem(fluid; density_calculator=fluid_density_calculator,
                                            state_equation, smoothing_kernel,
                                            smoothing_length, viscosity=viscosity_fluid,
                                            acceleration=system_acceleration,

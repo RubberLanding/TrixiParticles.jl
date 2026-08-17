@@ -99,8 +99,8 @@ function create_cache_refinement(initial_condition, refinement)
     neighbor_mass = zeros(ELTYPE, n_particles)
     neighbor_count = zeros(Int, n_particles)
 
-    grad_density = zeros(ELTYPE, NDIMS, n_particles)
-    grad_velocity = zeros(ELTYPE, NDIMS, NDIMS, n_particles)
+    grad_density = zeros(ELTYPE, NDIMS * n_particles)
+    grad_velocity = zeros(ELTYPE, NDIMS * NDIMS * n_particles)
 
     return (; reference_mass, _particle_spacing, is_anchor_particle,
             candidate_flags, candidate_offsets,

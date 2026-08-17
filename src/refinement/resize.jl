@@ -299,7 +299,9 @@ end
 # We need one of these for each type of cache (and for each type of `_FluidSystem`?)
 function resize_cache!(system::WeaklyCompressibleSPHSystem, n)
     (; reference_mass, _particle_spacing, is_anchor_particle, candidate_flags,
-     candidate_offsets, neighbor_mass, neighbor_count) = system.cache
+     candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density, grad_velocity) = system.cache
+
+    NDIMS = ndims(system)
 
     resize!(reference_mass, n)
     resize!(_particle_spacing, n)
@@ -308,6 +310,9 @@ function resize_cache!(system::WeaklyCompressibleSPHSystem, n)
     resize!(candidate_offsets, n)
     resize!(neighbor_mass, n)
     resize!(neighbor_count, n)
+    resize!(delta_v, n * NDIMS)
+    resize!(grad_density, n * NDIMS)
+    resize!(grad_velocity, n * NDIMS * NDIMS)
 
     return system
 end

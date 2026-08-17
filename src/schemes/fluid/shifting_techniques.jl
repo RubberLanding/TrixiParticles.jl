@@ -16,7 +16,7 @@ particle_shifting_from_callback!(u_ode, shifting, system, v_ode, semi, integrato
 
 function create_cache_shifting(initial_condition, shifting_technique, refinement)
     if !isnothing(shifting_technique) || !isnothing(refinement)
-        delta_v = zeros(eltype(initial_condition), ndims(initial_condition),
+        delta_v = zeros(eltype(initial_condition), ndims(initial_condition) * 
                         nparticles(initial_condition))
         return (; delta_v)
     end
@@ -36,7 +36,11 @@ end
 end
 
 @propagate_inbounds function delta_v(system, ::AbstractShiftingTechnique, particle)
-    return extract_svector(system.cache.delta_v, system, particle)
+    (; delta_v) = system.cache
+    NDIMS = ndims(system)
+    
+    # Extract the vector using linear indexing
+    return SVector(ntuple(dim -> delta_v[(particle - 1) * NDIMS + dim], NDIMS))
 end
 
 function update_shifting!(system, shifting, v, u, v_ode, u_ode, semi)
@@ -499,8 +503,8 @@ end
 
             # Write into the buffer
             for i in eachindex(delta_v_)
-                @inbounds delta_v[i, particle] += delta_v_[i]
-            end
+                idx = (particle - 1) * NDIMS + i
+                @inbounds cache.delta_v[idx] += delta_v_[i]            end
         end
     end
 
@@ -544,7 +548,8 @@ function apply_particle_shifting!(u_ode, ::ParticleShiftingTechnique{false},
     # Add δr from the cache to the current coordinates
     @threaded semi for particle in eachparticle(system)
         for i in axes(delta_v, 1)
-            @inbounds u[i, particle] += dt * delta_v[i, particle]
+            idx = (particle - 1) * NDIMS + i
+            @inbounds u[i, particle] += dt * delta_v[idx]        
         end
     end
 
@@ -636,6 +641,7 @@ function update_shifting!(system, shifting::TransportVelocityAdami, v, u, v_ode,
     (; delta_v) = system.cache
     (; background_pressure) = shifting
 
+    NDIMS = ndims(system)
     sound_speed = system_sound_speed(system)
 
     set_zero!(delta_v)
@@ -706,7 +712,8 @@ function update_shifting!(system, shifting::TransportVelocityAdami, v, u, v_ode,
 
             # Write into the buffer
             for i in eachindex(delta_v_)
-                @inbounds delta_v[i, particle] += delta_v_[i]
+                idx = (particle - 1) * NDIMS + i
+                @inbounds delta_v[idx] += delta_v_[i]
             end
         end
     end
