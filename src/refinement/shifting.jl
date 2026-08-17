@@ -1,4 +1,6 @@
-@inline function shift_particles!(system, v_ode, u_ode, semi, integrator)
+@inline shift_particles!(system, v_ode, u_ode, semi, integrator) = system
+
+@inline function shift_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi, integrator)
     return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, integrator)
 end 
 
@@ -18,7 +20,9 @@ end
 function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement, 
                                   system, semi, dt; theta=1.0)
     (; cache) = system
-    (; delta_v, grad_velocity, grad_density) = cache
+    (; delta_v, grad_density, grad_velocity) = cache
+
+    NDIMS = ndims(system)
 
     u = wrap_u(u_ode, system, semi)
     v = wrap_v(v_ode, system, semi)
@@ -27,19 +31,29 @@ function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
 
     # Add δr from the cache to the current coordinates
     @threaded semi for particle in eachparticle(system)
+        # TODO: Check if this is indeed incorrect.
+        # Haftu et al. (2023) introduces a mathematical inconsistency.
+        # Eq. 36 scales the position shift by theta.
+        # However, Eq. 37 omits theta when updating properties via the Taylor series.
+        # To maintain a mathematically consistent Taylor series expansion, the properties 
+        # must be evaluated using the actual applied displacement (theta * dr_i).
         for i in 1:NDIMS
+            idx = (particle - 1) * NDIMS + i
+
             # δr_i = dt * v_shift_i
-            dr_i = dt * delta_v[i, particle]
+            dr_i = dt * delta_v[idx]
 
             # Eq 36: r'_i = r_i + θ * δr_i
             @inbounds u[i, particle] += theta * dr_i
 
             # Eq 37 for ρ: ρ'_i = ρ_i + ∇ρ_i ⋅ δr_i
-            @inbounds current_density(v, system)[particle] += grad_density[i, particle] * dr_i 
+            @inbounds current_density(v, system)[particle] += grad_density[idx] * dr_i * theta
 
             for j in 1:NDIMS
+                idx_3d = (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
+
                 # Eq 37 for v: v'_i = v_i + ∇v_i ⋅ δr_i
-                @inbounds v[j, particle] += grad_velocity[i, j, particle] * dr_i
+                @inbounds v[j, particle] += grad_velocity[idx_3d] * dr_i * theta
             end
         end
     end
@@ -50,9 +64,13 @@ end
 @fastpow function update_shifting_inner!(system, refinement::ParticleRefinement,
                                          v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
-    (; delta_v, grad_velocity, grad_density) = cache
+    (; delta_v, grad_density, grad_velocity) = cache
+
+    NDIMS = ndims(system)
 
     set_zero!(delta_v)
+    set_zero!(grad_density)
+    set_zero!(grad_velocity)
 
     v_max_ = v_max(refinement.shifting_technique, v, system)
 
@@ -75,7 +93,7 @@ end
 
             h_a = smoothing_length(system, particle)
             h_b = smoothing_length(neighbor_system, neighbor)
-            h = min(h_a, h_b)
+            h = 0.5 * (h_a + h_b)
 
             dx = particle_spacing(system, particle)
             Wdx = kernel(smoothing_kernel, dx, h)

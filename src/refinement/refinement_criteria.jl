@@ -60,7 +60,6 @@ end
         # Only consider particles with a distance > 0.
         distance < sqrt(eps()) && return
         
-        # QUESTION: So we repeatedly overwrite the spacing for a particle? Do we want that?
         spacing_neighbor = TrixiParticles.particle_spacing(neighbor_system, neighbor)
         spacing_particle = TrixiParticles.particle_spacing(particle_system, particle)
 
@@ -71,4 +70,30 @@ end
     end
 
     return particle_system
+end
+
+# JUST FOR TESTING TAYLOR GREENE VORTEX WITH REFINEMENT 
+@inline function (criterion::SolutionRefinementCriterion)(system, v_ode, u_ode, semi)
+    u = TrixiParticles.wrap_u(u_ode, system, semi)
+    v = TrixiParticles.wrap_v(v_ode, system, semi)
+    
+    TrixiParticles.@threaded semi for particle in TrixiParticles.eachparticle(system)
+        pos = TrixiParticles.current_coords(u, system, particle)
+        
+        # This safely defaults all particles to NOT be merge anchors!
+        system.cache.reference_mass[particle] = TrixiParticles.hydrodynamic_mass(system, particle)
+        system.cache.is_anchor_particle[particle] = false
+        
+        # Only split a tiny 0.4 x 0.4 box perfectly in the center.
+        if (0.3 < pos[1] < 0.7) && (0.3 < pos[2] < 0.7)
+            system.cache._particle_spacing[particle] = system.particle_refinement.min_spacing
+            
+            # This triggers splitting safely because target_mass < current_mass.
+            target_mass = TrixiParticles.current_density(v, system, particle) * system.particle_refinement.min_spacing^2
+            system.cache.reference_mass[particle] = target_mass
+            
+            # NO ANCHOR FLAG HERE! We want to split, not merge!
+        end
+    end
+    return system
 end

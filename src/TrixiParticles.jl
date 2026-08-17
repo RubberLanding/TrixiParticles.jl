@@ -118,7 +118,7 @@ export SurfaceTensionAkinci, CohesionForceAkinci, SurfaceTensionMorris,
 export ColorfieldSurfaceNormal
 export SymplecticPositionVerlet
 export coordinates_eltype
-export ParticleRefinement, ResizeBuffer
+export ParticleRefinement, ResizeBuffer, SpatialRefinementCriterion, SolutionRefinementCriterion
 export CubicSplitting, TriangularSplitting, HexagonalSplitting
 
 end # module

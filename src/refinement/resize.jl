@@ -83,10 +83,10 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
     end
 
     # Resize the neighborhood searches in the Semidiscretization
-    new_semi = resize_semi(semi)
-    reinitialize_neighborhood_searches!(new_semi, u_ode)
+    resize_semi!(semi)
+    reinitialize_neighborhood_searches!(semi, u_ode)
 
-    return new_semi
+    return semi
 end
 
 # IMPORTANT: `indices_delete_particles` needs to be sorted
@@ -96,9 +96,6 @@ function overwrite_swap(system, v, u, n_new_particles)
      positions_new) = resize_buffer
 
     NDIMS = ndims(system)
-    vel_view = reshape(velocities_new, NDIMS, :)
-    pos_view = reshape(positions_new, NDIMS, :)
-
     # TODO: Implement without `findall()`
     # Automatically sorted
     indices_delete_particles = findall(delete_candidates)
@@ -106,12 +103,14 @@ function overwrite_swap(system, v, u, n_new_particles)
     # Overwrite the particles to delete with new particles 
     for idx in 1:n_add_particles[1]
         idx_delete = indices_delete_particles[idx]
+        vel = SVector(ntuple(dim -> velocities_new[(idx - 1) * NDIMS + dim], NDIMS))
+        pos = SVector(ntuple(dim -> positions_new[(idx - 1) * NDIMS + dim], NDIMS))
 
+        set_particle_velocity!(v, system, idx_delete, vel)
+        set_particle_position!(u, system, idx_delete, pos)    
         set_particle_smoothing_length!(system, idx_delete, smoothing_lengths_new[idx])
         set_particle_mass!(system, idx_delete, masses_new[idx])
-        set_particle_density!(v, system, idx_delete, densities_new[idx])
-        @views set_particle_velocity!(v, system, idx_delete, vel_view[:, idx])
-        @views set_particle_position!(u, system, idx_delete, pos_view[:, idx])
+        set_particle_density!(v, system, idx_delete, densities_new[idx])        
     end
 
     # Move the particles to be deleted to the end by swapping
@@ -155,21 +154,20 @@ function overwrite_append(system, v, u)
      positions_new) = resize_buffer
 
     NDIMS = ndims(system)
-    vel_view = reshape(velocities_new, NDIMS, :)
-    pos_view = reshape(positions_new, NDIMS, :)
-
     # TODO: Implement without `findall()`
     indices_delete_particles = findall(delete_candidates)
 
     # Overwrite the particles to delete with new particles 
     for i in 1:n_delete_particles[1]
         idx_delete = indices_delete_particles[i]
+        vel = SVector(ntuple(dim -> velocities_new[(i - 1) * NDIMS + dim], NDIMS))
+        pos = SVector(ntuple(dim -> positions_new[(i - 1) * NDIMS + dim], NDIMS))
 
+        set_particle_velocity!(v, system, idx_delete, vel)
+        set_particle_position!(u, system, idx_delete, pos)    
         set_particle_smoothing_length!(system, idx_delete, smoothing_lengths_new[i])
         set_particle_mass!(system, idx_delete, masses_new[i])
         set_particle_density!(v, system, idx_delete, densities_new[i])
-        @views set_particle_velocity!(v, system, idx_delete, vel_view[:, i])
-        @views set_particle_position!(u, system, idx_delete, pos_view[:, i])
     end
 
     n_particles_diff = n_add_particles[1] - n_delete_particles[1]
@@ -177,12 +175,14 @@ function overwrite_append(system, v, u)
     for k in 1:n_particles_diff
         idx = n_current_particles[1] + k
         idx_new = n_delete_particles[1] + k
-
+        vel = SVector(ntuple(dim -> velocities_new[(idx_new - 1) * NDIMS + dim], NDIMS))
+        pos = SVector(ntuple(dim -> positions_new[(idx_new - 1) * NDIMS + dim], NDIMS))
+        
+        set_particle_velocity!(v, system, idx, vel)
+        set_particle_position!(u, system, idx, pos)    
         set_particle_smoothing_length!(system, idx, smoothing_lengths_new[idx_new])
         set_particle_mass!(system, idx, masses_new[idx_new])
         set_particle_density!(v, system, idx, densities_new[idx_new])
-        @views set_particle_velocity!(v, system, idx, vel_view[:, idx_new])
-        @views set_particle_position!(u, system, idx, pos_view[:, idx_new])
     end
 end
 
@@ -335,28 +335,26 @@ function reset_resize_buffer!(resize_buffer::ResizeBuffer, system::AbstractFluid
     return resize_buffer
 end
 
-function resize_semi(semi::Semidiscretization)
-    (; systems) = semi
+function resize_semi!(semi::Semidiscretization)
+    (; systems, neighborhood_searches) = semi
 
-    new_searches = map(systems) do system
-        map(systems) do neighbor_system
-
+    for system in systems
+        for neighbor_system in systems
             # Bypass `get_neighborhood_search` for TLSPH.
             # We do not refine TLSPH and do not want to modify its `self_interaction_nhs`.
             # Instead we take the nhs stored in the semidiscretization and resize it. 
             system_index = system_indices(system, semi)
             neighbor_index = system_indices(neighbor_system, semi)
 
-            old_nhs = semi.neighborhood_searches[system_index][neighbor_index]
+            old_nhs = neighborhood_searches[system_index, neighbor_index]
             n_new = nparticles(neighbor_system)
-            copy_neighborhood_search(old_nhs, old_nhs.search_radius, n_new)
+            neighborhood_searches[system_index, neighbor_index] = copy_neighborhood_search(old_nhs, old_nhs.search_radius, n_new)
         end
     end
 
-    return Semidiscretization(systems, semi.ranges_u, semi.ranges_v, new_searches,
-                              semi.parallelization_backend, semi.update_callback_used,
-                              semi.integrate_tlsph)
+    return semi
 end
+
 function reinitialize_neighborhood_searches!(semi, u_ode)
     foreach_system(semi) do system
         foreach_system(semi) do neighbor
@@ -374,8 +372,8 @@ function reinitialize_neighborhood_search!(semi, system, neighbor, u_ode)
     # Currently, this cannot use `semi.parallelization_backend`
     # because data is still on the CPU.   
     PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
-                               current_coords(u_system, system),
-                               current_coords(u_neighbor, neighbor),
+                               current_coordinates(u_system, system),
+                               current_coordinates(u_neighbor, neighbor),
                                eachindex_y=each_active_particle(neighbor),
                                parallelization_backend=PolyesterBackend())
 

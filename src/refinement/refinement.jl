@@ -162,11 +162,12 @@ end
 @inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
 
 function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
-    (; neighbor_mass, neighbor_count, smoothing_length_factor) = refinement
+    (; smoothing_length_factor, delete_candidates) = refinement
+    (; neighbor_mass, neighbor_count) = system.cache
 
     u = wrap_u(u_ode, system, semi)
     system_coords = current_coordinates(u, system)
-    set_zero!(neighbor_mass_sum)
+    set_zero!(neighbor_mass)
     set_zero!(neighbor_count)
 
     ELTYPE = eltype(u)
@@ -181,7 +182,7 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
     end 
 
     # Update the smoothing length with the average neighborhood mass (Eq. 35)
-    @threaded semi for particle in eachindex(neighbor_mass_sum)
+    @threaded semi for particle in eachindex(neighbor_mass)
         (delete_candidates[particle] || neighbor_count[particle] == 0) && return
 
         avg_mass = neighbor_mass[particle] * (one(ELTYPE) / neighbor_count[particle])

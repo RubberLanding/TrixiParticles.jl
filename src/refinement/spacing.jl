@@ -47,7 +47,7 @@ end
         spacing_min, spacing_max,
         spacing_avg = min_max_avg_spacing(system, semi, u_ode, system_coords,
                                           particle)
-
+        # TODO: Check for `spacing_min == 0.0` to avoid division-by-zero.
         if spacing_max / spacing_min < spacing_ratio^3
             new_spacing = min(spacing_max, spacing_ratio * spacing_min)
         else
@@ -90,9 +90,12 @@ end
         end
     end
 
-    if counter_neighbors != 0
+    if counter_neighbors == 0
+        spacing_particle = particle_spacing(system, particle)
+        return spacing_particle, spacing_particle, spacing_particle
+    else 
         spacing_avg = spacing_avg / counter_neighbors
-    end
-
+    end 
+    
     return spacing_min, spacing_max, spacing_avg
 end
