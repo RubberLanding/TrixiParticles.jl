@@ -62,19 +62,19 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
     end
 
     # Resize the v_ode, u_ode, semidiscretization and systems
-    new_semi = resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
-    integrator.p = new_semi
+    resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
-    foreach_system(new_semi) do system
-
+    foreach_system(semi) do system
         # TODO: Update smoothing lengths
-        update_smoothing_lengths!(system, v_ode, u_ode, new_semi)
-
+        update_smoothing_lengths!(system, v_ode, u_ode, semi)
+        
         # TODO: Shift the particles and correct the particle properties
-        shift_particles!(system, v_ode, u_ode, new_semi, integrator)
+        shift_particles!(system, v_ode, u_ode, semi, integrator)
     end
 
-    return new_semi
+    # TrixiParticles.@autoinfiltrate
+
+    return semi
 end
 
 # TODO

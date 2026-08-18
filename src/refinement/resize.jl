@@ -31,6 +31,26 @@ function ResizeBuffer(initial_condition)
                         smoothing_lengths_new, velocities_new, positions_new)
 end
 
+function reset_resize_buffer!(resize_buffer::ResizeBuffer, system::AbstractFluidSystem)
+    (; n_new_particles, n_add_particles, n_delete_particles,
+     masses_new, densities_new, smoothing_lengths_new, velocities_new,
+     positions_new) = resize_buffer
+
+    n_particles = nparticles(system)
+
+    fill!(n_new_particles, n_particles)
+    fill!(n_add_particles, 0)
+    fill!(n_delete_particles, 0)
+
+    fill!(masses_new, 0.0)
+    fill!(densities_new, 0.0)
+    fill!(smoothing_lengths_new, 0.0)
+    fill!(velocities_new, 0.0)
+    fill!(positions_new, 0.0)
+
+    return resize_buffer
+end
+
 function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
     # In case the total number of particles in the system decreased, 
     # swap the particles to be deleted to the end and resize the system. 
@@ -253,7 +273,7 @@ end
 
 @inline Base.resize!(system, ::Nothing, n) = system
 
-function Base.resize!(system::WeaklyCompressibleSPHSystem, refinement, n)
+function Base.resize!(system::AbstractFluidSystem, refinement, n)
     (; mass, pressure, smoothing_length) = system
 
     # Resize standard system properties
@@ -271,33 +291,32 @@ function Base.resize!(system::WeaklyCompressibleSPHSystem, refinement, n)
     return system
 end
 
-# Should be called in `split.jl` and `merge.jl` directly until buffer approach is implemented
-function resize_buffer!(buffer::ResizeBuffer, system::AbstractFluidSystem, n)
-    (; masses_new, densities_new,
-     smoothing_lengths_new, velocities_new, positions_new) = buffer
-    NDIMS = ndims(system)
+resize_density!(system, n, ::SummationDensity) = resize!(system.cache.density, n)
+resize_density!(system, n, ::ContinuityDensity) = system
 
-    resize!(masses_new, n)
-    resize!(densities_new, n)
-    resize!(smoothing_lengths_new, n)
-    resize!(velocities_new, NDIMS * n)
-    resize!(positions_new, NDIMS * n)
+function resize_cache!(system::AbstractFluidSystem, n)
+    resize_system_cache!(system, n)
+    resize_refinement_cache!(system, n)
+
+    return system
 end
 
-# TODO
-function resize_refinement!(refinement::ParticleRefinement, n)
-    (; delete_candidates, split_candidates, merge_candidates) = refinement
+# TODO: Resize data specific to WCSPH cache
+function resize_system_cache!(system::WeaklyCompressibleSPHSystem, n) return cache end 
 
-    resize!(delete_candidates, n)
-    resize!(split_candidates, n)
-    resize!(merge_candidates, n)
+# TODO: Resize data specific to EDAC cache
+function resize_system_cache!(system::EntropicallyDampedSPHSystem, n) 
+    (; cache) = system
+    (; pressure_average, neighbor_counter, beta) = cache
 
-    return refinement
-end
+    resize!(pressure_average, n)
+    resize!(neighbor_counter, n)
+    resize!(beta, n)
 
-# TODO
-# We need one of these for each type of cache (and for each type of `_FluidSystem`?)
-function resize_cache!(system::WeaklyCompressibleSPHSystem, n)
+    return cache
+end 
+
+function resize_refinement_cache!(system::AbstractFluidSystem, n)
     (; reference_mass, _particle_spacing, is_anchor_particle, candidate_flags,
      candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density, grad_velocity) = system.cache
 
@@ -317,27 +336,28 @@ function resize_cache!(system::WeaklyCompressibleSPHSystem, n)
     return system
 end
 
-resize_density!(system, n, ::SummationDensity) = resize!(system.cache.density, n)
-resize_density!(system, n, ::ContinuityDensity) = system
+# TODO
+function resize_refinement!(refinement::ParticleRefinement, n)
+    (; delete_candidates, split_candidates, merge_candidates) = refinement
 
-function reset_resize_buffer!(resize_buffer::ResizeBuffer, system::AbstractFluidSystem)
-    (; n_new_particles, n_add_particles, n_delete_particles,
-     masses_new, densities_new, smoothing_lengths_new, velocities_new,
-     positions_new) = resize_buffer
+    resize!(delete_candidates, n)
+    resize!(split_candidates, n)
+    resize!(merge_candidates, n)
 
-    n_particles = nparticles(system)
+    return refinement
+end
 
-    fill!(n_new_particles, n_particles)
-    fill!(n_add_particles, 0)
-    fill!(n_delete_particles, 0)
+# Should be called in `split.jl` and `merge.jl` directly until buffer approach is implemented
+function resize_buffer!(buffer::ResizeBuffer, system::AbstractFluidSystem, n)
+    (; masses_new, densities_new,
+     smoothing_lengths_new, velocities_new, positions_new) = buffer
+    NDIMS = ndims(system)
 
-    fill!(masses_new, 0.0)
-    fill!(densities_new, 0.0)
-    fill!(smoothing_lengths_new, 0.0)
-    fill!(velocities_new, 0.0)
-    fill!(positions_new, 0.0)
-
-    return resize_buffer
+    resize!(masses_new, n)
+    resize!(densities_new, n)
+    resize!(smoothing_lengths_new, n)
+    resize!(velocities_new, NDIMS * n)
+    resize!(positions_new, NDIMS * n)
 end
 
 function resize_semi!(semi::Semidiscretization)
