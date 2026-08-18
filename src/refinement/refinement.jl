@@ -67,7 +67,8 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
     foreach_system(semi) do system
         # TODO: Update smoothing lengths
         update_smoothing_lengths!(system, v_ode, u_ode, semi)
-        
+
+        # TrixiParticles.@autoinfiltrate
         # TODO: Shift the particles and correct the particle properties
         shift_particles!(system, v_ode, u_ode, semi, integrator)
     end
