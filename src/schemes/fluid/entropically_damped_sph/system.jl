@@ -62,7 +62,7 @@ See [Entropically Damped Artificial Compressibility for SPH](@ref edac) for more
 """
 struct EntropicallyDampedSPHSystem{NDIMS, ELTYPE <: Real, IC, M, DC, K, V, COR, PF, TV,
                                    AVGP, ST, SRFT, SRFN, B, PR,
-                                   C} <: AbstractFluidSystem{NDIMS}
+                                   C, SL} <: AbstractFluidSystem{NDIMS}
     initial_condition                 :: IC
     mass                              :: M # Vector{ELTYPE}: [particle]
     density_calculator                :: DC
@@ -81,6 +81,7 @@ struct EntropicallyDampedSPHSystem{NDIMS, ELTYPE <: Real, IC, M, DC, K, V, COR, 
     buffer                            :: B
     particle_refinement               :: PR
     cache                             :: C
+    smoothing_length                  :: SL
 end
 
 # The default constructor needs to be accessible for Adapt.jl to work with this struct.
@@ -140,6 +141,10 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
     avg_pressure_reduction = Val(average_pressure_reduction)
 
     nu_edac = (alpha * smoothing_length * sound_speed) / 8
+ 
+    if !isnothing(particle_refinement)
+        smoothing_length = fill(smoothing_length, n_particles)
+    end
 
     cache = (; create_cache_density(initial_condition, density_calculator)...,
              create_cache_shifting(initial_condition, shifting_technique)...,
@@ -151,6 +156,7 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
                                           n_particles)...,
              create_cache_correction(correction, initial_condition.density, NDIMS,
                                      n_particles)...,
+             create_cache_refinement(initial_condition, particle_refinement)...,
              # Per-system color tag for colorfield surface-normal logic and VTK output.
              color=Int(color_value))
 
@@ -168,14 +174,14 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
                                 typeof(avg_pressure_reduction), typeof(source_terms),
                                 typeof(surface_tension), typeof(surface_normal_method),
                                 typeof(buffer), Nothing,
-                                typeof(cache)}(initial_condition, mass, density_calculator,
+                                typeof(cache), typeof(smoothing_length)}(initial_condition, mass, density_calculator,
                                                smoothing_kernel, sound_speed, viscosity,
                                                nu_edac, acceleration_, correction,
                                                pressure_acceleration, shifting_technique,
                                                avg_pressure_reduction,
                                                source_terms, surface_tension,
                                                surface_normal_method, buffer,
-                                               particle_refinement, cache)
+                                               particle_refinement, cache, smoothing_length)
 end
 
 create_cache_avg_pressure_reduction(initial_condition, ::Val{false}) = (;)
@@ -183,8 +189,9 @@ create_cache_avg_pressure_reduction(initial_condition, ::Val{false}) = (;)
 function create_cache_avg_pressure_reduction(initial_condition, ::Val{true})
     pressure_average = copy(initial_condition.pressure)
     neighbor_counter = Vector{Int}(undef, nparticles(initial_condition))
+    beta = ones(eltype(initial_condition.density), nparticles(initial_condition))
 
-    return (; pressure_average, neighbor_counter)
+    return (; pressure_average, neighbor_counter, beta)
 end
 
 function Base.show(io::IO, system::EntropicallyDampedSPHSystem)
@@ -324,11 +331,12 @@ end
 # but not for WCSPH, according to Ramachandran & Puri (2019), Section 3.2.
 # See eq. 16 and 17 in Ramachandran & Puri (2019) for an explanation of the technique.
 function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
-    (; cache) = system
-    (; pressure_average, neighbor_counter) = cache
+    (; cache, particle_refinement) = system
+    (; pressure_average, neighbor_counter, beta) = cache
 
     set_zero!(pressure_average)
     set_zero!(neighbor_counter)
+    set_zero!(beta)
 
     u = wrap_u(u_ode, system, semi)
 
@@ -350,6 +358,8 @@ function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
             pressure_average[particle] += current_pressure(v_neighbor_system,
                                                            neighbor_system, neighbor)
             neighbor_counter[particle] += 1
+
+            compute_beta!(system, neighbor_system, particle, neighbor, distance, particle_refinement)
         end
     end
 
@@ -357,8 +367,43 @@ function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
     # for zero neighbors. That is, the `particle` itself is also taken into account.
     pressure_average ./= neighbor_counter
 
+    finalize_beta!(system, v_ode, particle_refinement)
+
     return system
 end
+
+@inline compute_beta!(system, neighbor_system, particle, neighbor, distance, ::Nothing) = nothing
+
+@inline function compute_beta!(system, neighbor_system, particle, neighbor, distance, refinement)
+    (; cache, smoothing_kernel) = system
+    (; beta) = cache
+
+    # Accumulate the sum of m_j * r_ij * (dW/dr_ij) for the particle (Eq. 7)
+    mass_neighbor = hydrodynamic_mass(neighbor_system, neighbor)
+    smoothing_length_particle = smoothing_length(system, particle)
+    beta[particle] += mass_neighbor * distance * kernel_deriv(smoothing_kernel, distance, smoothing_length_particle)
+
+    return nothing
+end
+
+@inline finalize_beta!(system, v_ode, ::Nothing) = nothing
+
+@inline function finalize_beta!(system, v_ode, refinement)
+    (; cache) = system
+    (; beta) = cache
+    d = ndims(system)
+    
+    # Multiply the accumulated sum by -1 / (rho_i * d) (Eq. 7)
+    for particle in each_integrated_particle(system)
+        rho_i = current_density(v_ode, system, particle)
+        beta[particle] *= -1.0 / (rho_i * d)
+    end
+    
+    return nothing
+end
+
+@inline get_beta(system, particle, ::Nothing) = 1.0
+@inline @inbounds get_beta(system, particle, refinement) = system.cache.beta[particle]
 
 function write_v0!(v0, system::EntropicallyDampedSPHSystem, ::SummationDensity)
     # Note that `.=` is very slightly faster, but not GPU-compatible

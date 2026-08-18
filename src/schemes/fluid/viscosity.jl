@@ -6,21 +6,57 @@ end
 # Unpack the neighboring systems viscosity to dispatch on the viscosity type.
 # This function is only necessary to allow `nothing` as viscosity.
 # Otherwise, we could just apply the viscosity as a function directly.
-@propagate_inbounds function dv_viscosity!(dv_particle,
+@propagate_inbounds function dv_viscosity!(dv_particle, refinement,
                                            particle_system::AbstractSystem, neighbor_system,
                                            v_particle_system, v_neighbor_system,
                                            particle, neighbor, pos_diff, distance,
                                            sound_speed, m_a, m_b, rho_a, rho_b,
-                                           v_a, v_b, grad_kernel,
+                                           v_a, v_b, grad_kernel, grad_kernel_avg, beta_a_inv,
                                            viscosity_correction=1)
     viscosity = viscosity_model(particle_system, neighbor_system)
 
+    return dv_viscosity!(dv_particle, refinement, viscosity,
+                         particle_system, neighbor_system,
+                         v_particle_system, v_neighbor_system,
+                         particle, neighbor, pos_diff, distance,
+                         sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel,
+                         grad_kernel_avg, beta_a_inv, 
+                         viscosity_correction)
+end
+
+@inline function dv_viscosity!(dv_particle, ::Nothing, viscosity,
+                               particle_system, neighbor_system,
+                               v_particle_system, v_neighbor_system,
+                               particle, neighbor, pos_diff, distance,
+                               sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel,
+                               grad_kernel_avg, beta_a_inv,
+                               viscosity_correction)
     return dv_viscosity!(dv_particle, viscosity,
                          particle_system, neighbor_system,
                          v_particle_system, v_neighbor_system,
                          particle, neighbor, pos_diff, distance,
                          sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel,
                          viscosity_correction)
+end
+
+@inline function dv_viscosity!(dv_particle, refinement, viscosity,
+                               particle_system, neighbor_system,
+                               v_particle_system, v_neighbor_system,
+                               particle, neighbor, pos_diff, distance,
+                               sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel,
+                               grad_kernel_avg, beta_a_inv,
+                               viscosity_correction)
+    dv_viscous = Ref(zero(v_a))
+    dv_viscosity!(dv_viscous, viscosity,
+                  particle_system, neighbor_system,
+                  v_particle_system, v_neighbor_system,
+                  particle, neighbor, pos_diff, distance,
+                  sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel_avg,
+                  viscosity_correction)
+
+    dv_particle[] += dv_viscous[] * beta_a_inv
+
+    return dv_particle
 end
 
 @propagate_inbounds function dv_viscosity!(dv_particle,
