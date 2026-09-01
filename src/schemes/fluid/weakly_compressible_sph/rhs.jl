@@ -25,6 +25,9 @@ function interact!(dv, v_particle_system, u_particle_system,
     compact_support_ = compact_support(particle_system, neighbor_system)
     almostzero = sqrt(eps(compact_support_^2))
 
+    viscosity = viscosity_model(particle_system, neighbor_system)
+    shifting = shifting_technique(particle_system)
+
     @threaded semi for particle in each_integrated_particle(particle_system)
         # We are looping over the particles of `particle_system`, so it is guaranteed
         # that `particle` is in bounds of `particle_system`.
@@ -82,15 +85,17 @@ function interact!(dv, v_particle_system, u_particle_system,
                                                 distance, grad_kernel, correction)
             dv_particle[] += dv_pressure * pressure_correction
 
+
             # Propagate `@inbounds` to the viscosity function, which accesses particle data
-            @inbounds dv_viscosity!(dv_particle, particle_system, neighbor_system,
+            @inbounds dv_viscosity!(dv_particle, viscosity,
+                                    particle_system, neighbor_system,
                                     v_particle_system, v_neighbor_system,
                                     particle, neighbor, pos_diff, distance,
                                     sound_speed, m_a, m_b, rho_a, rho_b,
                                     v_a, v_b, grad_kernel, viscosity_correction)
 
             # Extra terms in the momentum equation when using a shifting technique
-            @inbounds dv_shifting!(dv_particle, shifting_technique(particle_system),
+            @inbounds dv_shifting!(dv_particle, shifting,
                                    particle_system, neighbor_system,
                                    v_particle_system, v_neighbor_system,
                                    particle, neighbor, m_a, m_b, rho_a, rho_b, v_a, v_b,

@@ -5,16 +5,17 @@ function split_particles!(semi, v_ode, u_ode)
     return semi
 end
 
-@inline split_particles!(system, v_ode, u_ode, semi) = system 
+@inline split_particles!(system, v_ode, u_ode, semi) = system
 
 function split_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi)
     return split_particles!(system, system.particle_refinement, v_ode, u_ode, semi)
-end 
+end
 
-@inline split_particles!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system 
+@inline split_particles!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
+                         semi) = system
 
 function split_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
-    (; resize_buffer) = refinement 
+    (; resize_buffer) = refinement
     (; n_add_particles) = resize_buffer
 
     v = wrap_v(v_ode, system, semi)
@@ -22,7 +23,7 @@ function split_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
 
     # Look for particles to split flag them
     _n_add_particles = collect_split_candidates!(system, refinement, v, u, semi)
-    
+
     # With the current resizing approach, `n_add_particles` gets set once 
     # per refinement, at this location. Thus we do not need to increment. 
     # _n_add_particles += n_add_particles[1]
@@ -33,42 +34,45 @@ function split_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
     # Resize the buffer to hold additional particle data
     resize_buffer!(resize_buffer, system, _n_add_particles)
 
-    if _n_add_particles <= 0 
-        return system 
+    if _n_add_particles <= 0
+        return system
     end
 
     # Update data for parent and child split particles
     apply_splitting!(system, refinement, v, u, semi)
-end 
+end
 
-@inline function collect_split_candidates!(system::AbstractFluidSystem, refinement, v, u, semi)
-    (; spacing_ratio, split_candidates, delete_candidates, 
-    splitting_pattern) = refinement
+@inline function collect_split_candidates!(system::AbstractFluidSystem, refinement, v, u,
+                                           semi)
+    (; split_candidates, delete_candidates,
+     splitting_pattern) = refinement
     (; reference_mass) = system.cache
 
-        @threaded semi for particle in eachparticle(system)
+    @threaded semi for particle in eachparticle(system)
         is_alive = !delete_candidates[particle]
         particle_mass = hydrodynamic_mass(system, particle)
-        particle_mass_max = spacing_ratio * reference_mass[particle]
+        particle_mass_max = 1.05 * reference_mass[particle]
 
         split_candidates[particle] = is_alive && (particle_mass > particle_mass_max)
     end
 
     n_childs_exclude_center = nchilds(system, splitting_pattern) - 1
-    total_new_particles = sum(split_candidates) * n_childs_exclude_center 
+    total_new_particles = sum(split_candidates) * n_childs_exclude_center
 
     return total_new_particles
 end
 
-@inline function apply_splitting!(system::AbstractFluidSystem, particle_refinement, v, u, semi)
+@inline function apply_splitting!(system::AbstractFluidSystem, particle_refinement, v, u,
+                                  semi)
     (; split_candidates, splitting_pattern, resize_buffer) = particle_refinement
-    (; candidate_flags, candidate_offsets) = system.cache
+    (; candidate_flags, candidate_offsets, reference_mass) = system.cache
     (; alpha, relative_position) = splitting_pattern
-    (; masses_new, densities_new, smoothing_lengths_new, velocities_new, positions_new) = resize_buffer
+    (; masses_new, reference_masses_new, densities_new, smoothing_lengths_new,
+     velocities_new, positions_new) = resize_buffer
 
     @threaded semi for particle in eachparticle(system)
         candidate_flags[particle] = split_candidates[particle] ? 1 : 0
-    end 
+    end
 
     cumsum!(candidate_offsets, candidate_flags)
 
@@ -78,6 +82,7 @@ end
         !split_candidates[particle] && return
         smoothing_length_old = smoothing_length(system, particle)
         mass_old = hydrodynamic_mass(system, particle)
+        reference_mass_old = reference_mass[particle]
         mass_new = mass_old / nchilds(system, splitting_pattern)
         rho_a = current_density(v, system, particle)
         pos_center = current_coords(u, system, particle)
@@ -93,10 +98,9 @@ end
             rel_pos = smoothing_length_old * relative_position[child_id_local]
             new_pos = pos_center + rel_pos
 
+            reference_masses_new[child] = reference_mass_old
             masses_new[child] = mass_new
-
             densities_new[child] = rho_a
-
             smoothing_lengths_new[child] = smoothing_length_new
 
             child_offset = (child - 1) * NDIMS
@@ -107,6 +111,8 @@ end
             end
         end
     end
+
+    # TrixiParticles.@autoinfiltrate
 
     return system
 end

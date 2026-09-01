@@ -52,7 +52,7 @@ end
 # affect
 function (refinement_callback::ParticleRefinementCallback)(integrator)
     t = integrator.t
-    semi = integrator.p
+    semi = integrator.p.semi
     v_ode, u_ode = integrator.u.x
 
     # Update NHS
@@ -74,7 +74,7 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
     # OrdinaryDiffEqCore.auto_dt_reset!(integrator)
 
     # Tell OrdinaryDiffEq that u has been modified
-    SciMLBase.u_modified!(integrator, true)
+    # SciMLBase.u_modified!(integrator, true)
 
     # With SciMLBase v3, `u_modified!` is technically deprecated.  
     # SciMLBase.derivative_discontinuity!(integrator, true)

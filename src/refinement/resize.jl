@@ -3,6 +3,7 @@ struct ResizeBuffer{IArray, FArray}
     n_delete_particles    :: IArray
     n_new_particles       :: IArray
     masses_new            :: FArray
+    reference_masses_new  :: FArray
     densities_new         :: FArray
     smoothing_lengths_new :: FArray
     velocities_new        :: FArray
@@ -17,6 +18,7 @@ function ResizeBuffer(initial_condition)
 
     # 1D Vectors for physical properties
     masses_new = similar(initial_condition.mass, 0)
+    reference_masses_new = similar(initial_condition.mass, 0)
     densities_new = similar(initial_condition.density, 0)
 
     # Assuming smoothing length uses the same float type as mass
@@ -27,13 +29,13 @@ function ResizeBuffer(initial_condition)
     positions_new = similar(initial_condition.coordinates, 0)
 
     return ResizeBuffer(n_add_particles, n_delete_particles, n_new_particles,
-                        masses_new, densities_new,
+                        masses_new, reference_masses_new, densities_new,
                         smoothing_lengths_new, velocities_new, positions_new)
 end
 
 function reset_resize_buffer!(resize_buffer::ResizeBuffer, system::AbstractFluidSystem)
     (; n_new_particles, n_add_particles, n_delete_particles,
-     masses_new, densities_new, smoothing_lengths_new, velocities_new,
+     masses_new, reference_masses_new, densities_new, smoothing_lengths_new, velocities_new,
      positions_new) = resize_buffer
 
     n_particles = nparticles(system)
@@ -43,6 +45,7 @@ function reset_resize_buffer!(resize_buffer::ResizeBuffer, system::AbstractFluid
     fill!(n_delete_particles, 0)
 
     fill!(masses_new, 0.0)
+    fill!(reference_masses_new, 0.0)
     fill!(densities_new, 0.0)
     fill!(smoothing_lengths_new, 0.0)
     fill!(velocities_new, 0.0)
@@ -111,8 +114,10 @@ end
 
 # IMPORTANT: `indices_delete_particles` needs to be sorted
 function overwrite_swap(system, v, u, n_new_particles)
+    (; reference_mass) = system.cache
     (; delete_candidates, n_current_particles, resize_buffer) = system.particle_refinement
-    (; n_add_particles, masses_new, densities_new, smoothing_lengths_new, velocities_new,
+    (; n_add_particles, masses_new, reference_masses_new, densities_new,
+     smoothing_lengths_new, velocities_new,
      positions_new) = resize_buffer
 
     NDIMS = ndims(system)
@@ -127,10 +132,11 @@ function overwrite_swap(system, v, u, n_new_particles)
         pos = SVector(ntuple(dim -> positions_new[(idx - 1) * NDIMS + dim], NDIMS))
 
         set_particle_velocity!(v, system, idx_delete, vel)
-        set_particle_position!(u, system, idx_delete, pos)    
+        set_particle_position!(u, system, idx_delete, pos)
         set_particle_smoothing_length!(system, idx_delete, smoothing_lengths_new[idx])
         set_particle_mass!(system, idx_delete, masses_new[idx])
-        set_particle_density!(v, system, idx_delete, densities_new[idx])        
+        set_particle_density!(v, system, idx_delete, densities_new[idx])
+        reference_mass[idx_delete] = reference_masses_new[idx]
     end
 
     # Move the particles to be deleted to the end by swapping
@@ -155,6 +161,7 @@ function overwrite_swap(system, v, u, n_new_particles)
         density_swap = current_density(v, system, idx_swap)
         vel_swap = current_velocity(v, system, idx_swap)
         pos_swap = current_coords(u, system, idx_swap)
+        reference_mass_swap = reference_mass[idx_swap]
 
         # Copy particle to idx_delete
         set_particle_smoothing_length!(system, idx_delete, smoothing_length_swap)
@@ -162,15 +169,17 @@ function overwrite_swap(system, v, u, n_new_particles)
         set_particle_density!(v, system, idx_delete, density_swap)
         set_particle_velocity!(v, system, idx_delete, vel_swap)
         set_particle_position!(u, system, idx_delete, pos_swap)
+        reference_mass[idx_delete] = reference_mass_swap
 
         idx_swap -= 1
     end
 end
 
 function overwrite_append(system, v, u)
+    (; reference_mass) = system.cache
     (; delete_candidates, n_current_particles, resize_buffer) = system.particle_refinement
     (; n_add_particles, n_delete_particles,
-     masses_new, densities_new, smoothing_lengths_new, velocities_new,
+     masses_new, reference_masses_new, densities_new, smoothing_lengths_new, velocities_new,
      positions_new) = resize_buffer
 
     NDIMS = ndims(system)
@@ -184,10 +193,11 @@ function overwrite_append(system, v, u)
         pos = SVector(ntuple(dim -> positions_new[(i - 1) * NDIMS + dim], NDIMS))
 
         set_particle_velocity!(v, system, idx_delete, vel)
-        set_particle_position!(u, system, idx_delete, pos)    
+        set_particle_position!(u, system, idx_delete, pos)
         set_particle_smoothing_length!(system, idx_delete, smoothing_lengths_new[i])
         set_particle_mass!(system, idx_delete, masses_new[i])
         set_particle_density!(v, system, idx_delete, densities_new[i])
+        reference_mass[idx_delete] = reference_masses_new[i]
     end
 
     n_particles_diff = n_add_particles[1] - n_delete_particles[1]
@@ -197,12 +207,13 @@ function overwrite_append(system, v, u)
         idx_new = n_delete_particles[1] + k
         vel = SVector(ntuple(dim -> velocities_new[(idx_new - 1) * NDIMS + dim], NDIMS))
         pos = SVector(ntuple(dim -> positions_new[(idx_new - 1) * NDIMS + dim], NDIMS))
-        
+
         set_particle_velocity!(v, system, idx, vel)
-        set_particle_position!(u, system, idx, pos)    
+        set_particle_position!(u, system, idx, pos)
         set_particle_smoothing_length!(system, idx, smoothing_lengths_new[idx_new])
         set_particle_mass!(system, idx, masses_new[idx_new])
         set_particle_density!(v, system, idx, densities_new[idx_new])
+        reference_mass[idx] = reference_masses_new[idx_new]
     end
 end
 
@@ -274,12 +285,10 @@ end
 @inline Base.resize!(system, ::Nothing, n) = system
 
 function Base.resize!(system::AbstractFluidSystem, refinement, n)
-    (; mass, pressure, smoothing_length) = system
+    TrixiParticles.@autoinfiltrate
 
     # Resize standard system properties
-    resize!(mass, n)
-    resize!(pressure, n)
-    resize!(smoothing_length, n)
+    resize_system!(system, n)
 
     # Resize the Density
     resize_density!(system, n, system.density_calculator)
@@ -291,8 +300,34 @@ function Base.resize!(system::AbstractFluidSystem, refinement, n)
     return system
 end
 
-resize_density!(system, n, ::SummationDensity) = resize!(system.cache.density, n)
-resize_density!(system, n, ::ContinuityDensity) = system
+@inline resize_system!(system, n) = system
+
+@inline function resize_system!(system::EntropicallyDampedSPHSystem, n)
+    (; mass, smoothing_length) = system
+
+    resize!(mass, n)
+    resize!(smoothing_length, n)
+
+    return system
+end
+
+@inline function resize_system!(system::WeaklyCompressibleSPHSystem, n)
+    (; mass, smoothing_length, pressure) = system
+
+    resize!(mass, n)
+    resize!(smoothing_length, n)
+    resize!(pressure, n)
+
+    return system
+end
+
+@inline function resize_density!(system, n, ::SummationDensity)
+    resize!(system.cache.density, n)
+
+    return system
+end
+
+@inline resize_density!(system, n, ::ContinuityDensity) = system
 
 function resize_cache!(system::AbstractFluidSystem, n)
     resize_system_cache!(system, n)
@@ -302,10 +337,12 @@ function resize_cache!(system::AbstractFluidSystem, n)
 end
 
 # TODO: Resize data specific to WCSPH cache
-function resize_system_cache!(system::WeaklyCompressibleSPHSystem, n) return cache end 
+function resize_system_cache!(system::WeaklyCompressibleSPHSystem, n)
+    return cache
+end
 
 # TODO: Resize data specific to EDAC cache
-function resize_system_cache!(system::EntropicallyDampedSPHSystem, n) 
+function resize_system_cache!(system::EntropicallyDampedSPHSystem, n)
     (; cache) = system
     (; pressure_average, neighbor_counter, beta) = cache
 
@@ -314,17 +351,17 @@ function resize_system_cache!(system::EntropicallyDampedSPHSystem, n)
     resize!(beta, n)
 
     return cache
-end 
+end
 
 function resize_refinement_cache!(system::AbstractFluidSystem, n)
-    (; reference_mass, _particle_spacing, is_anchor_particle, candidate_flags,
-     candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density, grad_velocity) = system.cache
+    (; reference_mass, _particle_spacing, candidate_flags,
+     candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density,
+     grad_velocity) = system.cache
 
     NDIMS = ndims(system)
 
     resize!(reference_mass, n)
     resize!(_particle_spacing, n)
-    resize!(is_anchor_particle, n)
     resize!(candidate_flags, n)
     resize!(candidate_offsets, n)
     resize!(neighbor_mass, n)
@@ -349,15 +386,36 @@ end
 
 # Should be called in `split.jl` and `merge.jl` directly until buffer approach is implemented
 function resize_buffer!(buffer::ResizeBuffer, system::AbstractFluidSystem, n)
-    (; masses_new, densities_new,
+    (; masses_new, reference_masses_new, densities_new,
      smoothing_lengths_new, velocities_new, positions_new) = buffer
     NDIMS = ndims(system)
 
     resize!(masses_new, n)
+    resize!(reference_masses_new, n)
     resize!(densities_new, n)
     resize!(smoothing_lengths_new, n)
     resize!(velocities_new, NDIMS * n)
     resize!(positions_new, NDIMS * n)
+end
+
+@inline resize_system_buffer!(buffer::Nothing, system, n) = buffer
+
+# # TODO `resize` allocates. Find a non-allocating version
+# @inline function update_system_buffer!(buffer::SystemBuffer)
+#     (; active_particle) = buffer
+
+#     # TODO: Parallelize (see https://github.com/trixi-framework/TrixiParticles.jl/issues/810)
+#     # Update the number of active particles and the active particle indices
+#     buffer.active_particle_count[] = count(active_particle)
+#     buffer.eachparticle[1:buffer.active_particle_count[]] .= findall(active_particle)
+
+#     return buffer
+# end
+
+@inline function resize_system_buffer!(buffer:SystemBuffer, system::AbstractFluidSystem, n)
+    (; active_particle, active_particle_count, eachparticle, buffer_size) = buffer
+
+    return buffer
 end
 
 function resize_semi!(semi::Semidiscretization)
@@ -365,6 +423,7 @@ function resize_semi!(semi::Semidiscretization)
 
     for system in systems
         for neighbor_system in systems
+
             # Bypass `get_neighborhood_search` for TLSPH.
             # We do not refine TLSPH and do not want to modify its `self_interaction_nhs`.
             # Instead we take the nhs stored in the semidiscretization and resize it. 
@@ -373,7 +432,10 @@ function resize_semi!(semi::Semidiscretization)
 
             old_nhs = neighborhood_searches[system_index, neighbor_index]
             n_new = nparticles(neighbor_system)
-            neighborhood_searches[system_index, neighbor_index] = copy_neighborhood_search(old_nhs, old_nhs.search_radius, n_new)
+            neighborhood_searches[system_index,
+                                  neighbor_index] = copy_neighborhood_search(old_nhs,
+                                                                             old_nhs.search_radius,
+                                                                             n_new)
         end
     end
 

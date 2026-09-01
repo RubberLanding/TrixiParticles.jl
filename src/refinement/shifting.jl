@@ -1,23 +1,23 @@
-@inline shift_particles!(system, v_ode, u_ode, semi, integrator) = system
+@inline shift_particles!(system, v_ode, u_ode, semi, dt) = system
 
-@inline function shift_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi, integrator)
-    return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, integrator)
-end 
+@inline function shift_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi, dt)
+    return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, dt)
+end
 
-@inline shift_particles!(system, ::Nothing, v_ode, u_ode, semi, integrator) = system 
+@inline shift_particles!(system, ::Nothing, v_ode, u_ode, semi, dt) = system
 
-@inline function shift_particles!(system, refinement, v_ode, u_ode, semi, integrator)
+@inline function shift_particles!(system, refinement, v_ode, u_ode, semi, dt)
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
 
     update_shifting_inner!(system, refinement, v, u, v_ode, u_ode, semi)
 
-    apply_particle_shifting!(u_ode, v_ode, refinement, system, semi, integrator.dt)
+    apply_particle_shifting!(u_ode, v_ode, refinement, system, semi, dt)
 
     return system
 end
 
-function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement, 
+function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
                                   system, semi, dt; theta=1.0)
     (; cache) = system
     (; delta_v, grad_density, grad_velocity) = cache
@@ -47,7 +47,8 @@ function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
             @inbounds u[i, particle] += theta * dr_i
 
             # Eq 37 for ρ: ρ'_i = ρ_i + ∇ρ_i ⋅ δr_i
-            @inbounds current_density(v, system)[particle] += grad_density[idx] * dr_i * theta
+            @inbounds current_density(v, system)[particle] += grad_density[idx] * dr_i *
+                                                              theta
 
             for j in 1:NDIMS
                 idx_3d = (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
@@ -102,7 +103,7 @@ end
             grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h)
 
             # Compute density gradient 
-            grad_density_ = (m_b / rho_b) * (rho_b - rho_a) * grad_kernel  
+            grad_density_ = (m_b / rho_b) * (rho_b - rho_a) * grad_kernel
 
             # Compute velocity gradient 
             v_a = current_velocity(v, system, particle)
@@ -120,7 +121,8 @@ end
             # - linearly with the particle spacing,
             # - linearly with the time step.
             # See https://github.com/trixi-framework/TrixiParticles.jl/pull/834.
-            delta_v_ = -v_max_ * (2 * h)^2 / (2 * dx) * (1 + (kernel_weight / Wdx)^4 * 2 / 10) *
+            delta_v_ = -v_max_ * (2 * h)^2 / (2 * dx) *
+                       (1 + (kernel_weight / Wdx)^4 * 2 / 10) *
                        m_b / (rho_a + rho_b) * grad_kernel
 
             # Write into the buffers
@@ -132,14 +134,15 @@ end
             for i in eachindex(grad_density_)
                 idx = (particle - 1) * NDIMS + i
                 @inbounds grad_density[idx] += grad_density_[i]
-            end 
+            end
 
+            # TODO: This just works for 2D, make it dimension-agnostic
             for j in axes(grad_velocity_, 2)
                 for i in axes(grad_velocity_, 1)
                     idx_3d = (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
                     @inbounds grad_velocity[idx_3d] += grad_velocity_[i, j]
-                end 
-            end 
+                end
+            end
         end
     end
 

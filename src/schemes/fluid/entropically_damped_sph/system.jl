@@ -97,11 +97,10 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
                                      correction=nothing,
                                      source_terms=nothing, surface_tension=nothing,
                                      surface_normal_method=nothing, buffer_size=nothing,
-                                     reference_particle_spacing=0.0, color_value=1)
+                                     reference_particle_spacing=0.0, color_value=1,
+                                     particle_refinement=nothing)
     buffer = isnothing(buffer_size) ? nothing :
              SystemBuffer(nparticles(initial_condition), buffer_size)
-
-    particle_refinement = nothing # TODO
 
     initial_condition = allocate_buffer(initial_condition, buffer)
 
@@ -147,7 +146,7 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
     end
 
     cache = (; create_cache_density(initial_condition, density_calculator)...,
-             create_cache_shifting(initial_condition, shifting_technique)...,
+             create_cache_shifting(initial_condition, shifting_technique, particle_refinement)...,
              create_cache_avg_pressure_reduction(initial_condition,
                                                  avg_pressure_reduction)...,
              create_cache_surface_normal(surface_normal_method, ELTYPE, NDIMS,
@@ -173,7 +172,7 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
                                 typeof(pressure_acceleration), typeof(shifting_technique),
                                 typeof(avg_pressure_reduction), typeof(source_terms),
                                 typeof(surface_tension), typeof(surface_normal_method),
-                                typeof(buffer), Nothing,
+                                typeof(buffer), typeof(particle_refinement),
                                 typeof(cache), typeof(smoothing_length)}(initial_condition, mass, density_calculator,
                                                smoothing_kernel, sound_speed, viscosity,
                                                nu_edac, acceleration_, correction,
@@ -268,6 +267,8 @@ end
 
 @inline shifting_technique(system::EntropicallyDampedSPHSystem) = system.shifting_technique
 
+@propagate_inbounds average_pressure(system, particle) = zero(eltype(system))
+
 @propagate_inbounds function average_pressure(system::EntropicallyDampedSPHSystem, particle)
     average_pressure(system, system.average_pressure_reduction, particle)
 end
@@ -296,6 +297,10 @@ end
 
 @inline function current_pressure(v, system::EntropicallyDampedSPHSystem)
     return view(v, ndims(system) + 1, :)
+end
+
+@inline function current_mass(system::EntropicallyDampedSPHSystem)
+    return system.mass
 end
 
 function update_quantities!(system::EntropicallyDampedSPHSystem, v, u,
@@ -339,6 +344,7 @@ function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
     set_zero!(beta)
 
     u = wrap_u(u_ode, system, semi)
+    v = wrap_v(v_ode, system, semi)
 
     # Use all other systems for the average pressure
     @trixi_timeit timer() "compute average pressure" foreach_system(semi) do neighbor_system
@@ -367,7 +373,7 @@ function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
     # for zero neighbors. That is, the `particle` itself is also taken into account.
     pressure_average ./= neighbor_counter
 
-    finalize_beta!(system, v_ode, particle_refinement)
+    finalize_beta!(system, v, particle_refinement)
 
     return system
 end
@@ -386,16 +392,16 @@ end
     return nothing
 end
 
-@inline finalize_beta!(system, v_ode, ::Nothing) = nothing
+@inline finalize_beta!(system, v, ::Nothing) = nothing
 
-@inline function finalize_beta!(system, v_ode, refinement)
+@inline function finalize_beta!(system, v, refinement)
     (; cache) = system
     (; beta) = cache
     d = ndims(system)
     
     # Multiply the accumulated sum by -1 / (rho_i * d) (Eq. 7)
     for particle in each_integrated_particle(system)
-        rho_i = current_density(v_ode, system, particle)
+        rho_i = current_density(v, system, particle)
         beta[particle] *= -1.0 / (rho_i * d)
     end
     
@@ -426,4 +432,8 @@ function restart_with!(system::EntropicallyDampedSPHSystem, v, u)
         system.initial_condition.velocity[:, particle] .= v[1:ndims(system), particle]
         system.initial_condition.pressure[particle] = v[end, particle]
     end
+end
+
+@inline function correction_matrix(system::EntropicallyDampedSPHSystem, particle)
+    extract_smatrix(system.cache.correction_matrix, system, particle)
 end

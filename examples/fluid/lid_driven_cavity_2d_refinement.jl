@@ -16,7 +16,7 @@
 # ==========================================================================================
 
 using TrixiParticles
-using OrdinaryDiffEqCore             # <-- Add this!
+using OrdinaryDiffEqCore
 using OrdinaryDiffEqLowStorageRK
 
 # ==========================================================================================
@@ -158,7 +158,7 @@ refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.iter == 
 
                                            SciMLBase.u_modified!(integrator, true)
 
-                                           TrixiParticles.@autoinfiltrate
+                                           # TrixiParticles.@autoinfiltrate
                                        end,
                                        save_positions=(false, false))
 

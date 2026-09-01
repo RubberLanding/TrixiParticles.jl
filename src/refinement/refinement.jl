@@ -9,16 +9,18 @@ struct ParticleRefinement{RC, ELTYPE, SP, BARRAY, IARRAY, RB, SC}
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
     smoothing_length_factor :: ELTYPE    # Constant corresponding to the value of smoothing length factor (= smoothing_length / particle_spacing) used in the simulation, see Eq. 35 for the merging proceduce
     splitting_pattern       :: SP
-    delete_candidates       :: BARRAY  
-    split_candidates        :: BARRAY  
-    merge_candidates        :: IARRAY  
+    delete_candidates       :: BARRAY
+    split_candidates        :: BARRAY
+    merge_candidates        :: IARRAY
     resize_buffer           :: RB
     n_current_particles     :: IARRAY
     shifting_technique      :: SC
+    reference_density       :: ELTYPE
 end
 
-function ParticleRefinement(; n_particles,
-                            spacing_ratio, min_spacing, resize_buffer, smoothing_length_factor = 1.2,
+function ParticleRefinement(; n_particles, spacing_ratio, min_spacing, resize_buffer,
+                            reference_density,
+                            smoothing_length_factor=1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
                             splitting_pattern=HexagonalSplitting(),
                             shifting_technique=ParticleShiftingTechniqueSun2017())
@@ -32,45 +34,73 @@ function ParticleRefinement(; n_particles,
     delete_candidates = zeros(Bool, n_particles)
     split_candidates = zeros(Bool, n_particles)
     merge_candidates = zeros(Int, n_particles)
-    
-    return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing, smoothing_length_factor,
-                              splitting_pattern, delete_candidates, split_candidates, merge_candidates, resize_buffer, [n_particles],
-                              shifting_technique)
+
+    return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing,
+                              smoothing_length_factor,
+                              splitting_pattern, delete_candidates, split_candidates,
+                              merge_candidates, resize_buffer, [n_particles],
+                              shifting_technique, reference_density)
 end
 
 # TODO
 function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
-
     foreach_system(semi) do system
-
+        # TrixiParticles.@autoinfiltrate
         # Reset the refinement before doing anything
         reset_refinement!(system, semi)
 
+        # TrixiParticles.@autoinfiltrate
         # Apply refinement criterion 
         apply_refinement_criteria!(system, v_ode, u_ode, semi)
 
+        # TrixiParticles.@autoinfiltrate
         # Update the spacing of particles           (Algorithm 1)
         update_particle_spacing(system, v_ode, u_ode, semi)
 
+        # TrixiParticles.@autoinfiltrate
         # Split the particles                       (Algorithm 2)
         split_particles!(system, v_ode, u_ode, semi)
 
+        # TrixiParticles.@autoinfiltrate
+        update_nparticles_new!(system)
+    end
+
+    # TrixiParticles.@autoinfiltrate
+
+    # Calling `resize!` here, because we need to update 
+    # the simulation with the newly splitted particles 
+    # before running the merge. 
+    # TODO: Make this more efficient by only updating the nhs 
+    # the merge operation needs to find the new particles and 
+    # re-route the getter function for properties like mass and
+    # position.  
+    resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
+
+    foreach_system(semi) do system
+        !isa(system, AbstractFluidSystem) && return
+        isnothing(system.particle_refinement) && return
+
+        reset_resize_buffer!(system.particle_refinement.resize_buffer, system)
+
+        # TrixiParticles.@autoinfiltrate
         # Merge the particles                       (Algorithm 3)
         merge_particles!(system, v_ode, u_ode, semi)
 
         update_nparticles_new!(system)
     end
 
-    # Resize the v_ode, u_ode, semidiscretization and systems
     resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
     foreach_system(semi) do system
+        # TrixiParticles.@autoinfiltrate
         # TODO: Update smoothing lengths
         update_smoothing_lengths!(system, v_ode, u_ode, semi)
 
         # TrixiParticles.@autoinfiltrate
         # TODO: Shift the particles and correct the particle properties
-        shift_particles!(system, v_ode, u_ode, semi, integrator)
+        shift_particles!(system, v_ode, u_ode, semi, integrator.dt)
+
+        # TrixiParticles.@autoinfiltrate
     end
 
     # TrixiParticles.@autoinfiltrate
@@ -92,7 +122,6 @@ function create_cache_refinement(initial_condition, refinement)
 
     reference_mass = zeros(ELTYPE, n_particles)
     _particle_spacing = zeros(ELTYPE, n_particles)
-    is_anchor_particle = falses(n_particles)
 
     candidate_flags = zeros(Int, n_particles)
     candidate_offsets = zeros(Int, n_particles)
@@ -103,7 +132,7 @@ function create_cache_refinement(initial_condition, refinement)
     grad_density = zeros(ELTYPE, NDIMS * n_particles)
     grad_velocity = zeros(ELTYPE, NDIMS * NDIMS * n_particles)
 
-    return (; reference_mass, _particle_spacing, is_anchor_particle,
+    return (; reference_mass, _particle_spacing,
             candidate_flags, candidate_offsets,
             neighbor_mass, neighbor_count, grad_density, grad_velocity)
 end
@@ -112,17 +141,17 @@ function reset_refinement!(semi)
     foreach_system(semi) do system
         reset_refinement!(semi, system)
     end
-end 
+end
 
-@inline reset_refinement!(system, semi) = system 
+@inline reset_refinement!(system, semi) = system
 
 function reset_refinement!(system::AbstractFluidSystem, semi)
     return reset_refinement!(system, system.particle_refinement, semi)
-end 
+end
 
 function reset_refinement!(system::AbstractFluidSystem, ::Nothing, semi)
-    return system 
-end 
+    return system
+end
 
 function reset_refinement!(system::AbstractFluidSystem, refinement, semi)
     (; delete_candidates, split_candidates, merge_candidates, resize_buffer) = refinement
@@ -131,20 +160,21 @@ function reset_refinement!(system::AbstractFluidSystem, refinement, semi)
     fill!(split_candidates, false)
     fill!(merge_candidates, 0)
 
-    reset_resize_buffer!(resize_buffer, system) 
-    reset_cache_refinement!(system.cache)
+    reset_resize_buffer!(resize_buffer, system)
+    reset_cache_refinement!(system, system.cache)
 
     return system
-end   
+end
 
 # TODO 
-function reset_cache_refinement!(cache) 
-    (; reference_mass, _particle_spacing, is_anchor_particle, candidate_flags, candidate_offsets, neighbor_count, neighbor_mass) = cache 
+function reset_cache_refinement!(system, cache)
+    (; particle_spacing) = system.initial_condition
+    (; reference_mass, _particle_spacing, candidate_flags, candidate_offsets,
+     neighbor_count, neighbor_mass) = cache
     ELTYPE = eltype(reference_mass)
 
     fill!(reference_mass, zero(ELTYPE))
-    fill!(_particle_spacing, zero(ELTYPE))
-    fill!(is_anchor_particle, false)
+    fill!(_particle_spacing, particle_spacing)
 
     fill!(candidate_flags, 0)
     fill!(candidate_offsets, 0)
@@ -153,43 +183,50 @@ function reset_cache_refinement!(cache)
     fill!(neighbor_mass, zero(ELTYPE))
 end
 
-
 @inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
 
 @inline function update_smoothing_lengths!(system::AbstractFluidSystem, v_ode, u_ode, semi)
     return update_smoothing_lengths!(system, system.particle_refinement, v_ode, u_ode, semi)
 end
 
-@inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
+@inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
+                                  semi) = system
 
-function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
-    (; smoothing_length_factor, delete_candidates) = refinement
+function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
+                                   semi)
+    (; smoothing_length_factor, delete_candidates, reference_density) = refinement
     (; neighbor_mass, neighbor_count) = system.cache
 
     u = wrap_u(u_ode, system, semi)
+    v = wrap_v(v_ode, system, semi)
+
     system_coords = current_coordinates(u, system)
     set_zero!(neighbor_mass)
     set_zero!(neighbor_count)
 
     ELTYPE = eltype(u)
-    inv_density = one(ELTYPE) / system.state_equation.reference_density
-    inv_ndims  = one(ELTYPE) / ndims(system)
+    inv_ndims = one(ELTYPE) / ndims(system)
 
     # Calculate the total neighborhood mass around a particle 
     foreach_point_neighbor(system, system, system_coords, system_coords,
                            semi) do particle, neighbor, pos_diff, distance
         neighbor_mass[particle] += hydrodynamic_mass(system, neighbor)
         neighbor_count[particle] += 1
-    end 
+    end
+
+    # TrixiParticles.@autoinfiltrate
 
     # Update the smoothing length with the average neighborhood mass (Eq. 35)
     @threaded semi for particle in eachindex(neighbor_mass)
-        (delete_candidates[particle] || neighbor_count[particle] == 0) && return
+        neighbor_count[particle] == 0 && return
 
-        avg_mass = neighbor_mass[particle] * (one(ELTYPE) / neighbor_count[particle])
-        new_smoothing_length = smoothing_length_factor * (inv_density * avg_mass)^inv_ndims
+        avg_volume = neighbor_mass[particle] *
+                     (one(ELTYPE) / (neighbor_count[particle] * reference_density))
+        new_smoothing_length = smoothing_length_factor * (avg_volume)^inv_ndims
         set_particle_smoothing_length!(system, particle, new_smoothing_length)
     end
+
+    # TrixiParticles.@autoinfiltrate
 
     return system
 end

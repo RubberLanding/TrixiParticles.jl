@@ -1,9 +1,9 @@
 function merge_particles!(semi, v_ode, u_ode)
     foreach_system(semi) do system
         merge_particles!(system, v_ode, u_ode, semi)
-    end 
+    end
 
-    return semi 
+    return semi
 end
 
 @inline merge_particles!(system, v_ode, u_ode, semi) = system
@@ -12,9 +12,11 @@ end
     return merge_particles!(system, system.particle_refinement, v_ode, u_ode, semi)
 end
 
-@inline merge_particles!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode, semi) = system
+@inline merge_particles!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
+                         semi) = system
 
-@inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi; merge_iter=3)
+@inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
+                                  semi; merge_iter=3)
     (; delete_candidates) = refinement
     (; n_delete_particles) = refinement.resize_buffer
     (; candidate_flags) = system.cache
@@ -32,19 +34,22 @@ end
         collect_merge_candidates!(system, refinement, v, u, semi)
         apply_merging!(system, refinement, v, u, semi)
     end
-    
+
     # Update the counter for the particles to delete
     @threaded semi for particle in eachparticle(system)
         candidate_flags[particle] = delete_candidates[particle] ? 1 : 0
-    end 
+    end
+
+    TrixiParticles.@autoinfiltrate
+
     fill!(n_delete_particles, sum(candidate_flags))
 
-    return system 
-end 
+    return system
+end
 
 function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi)
     (; spacing_ratio, split_candidates, merge_candidates, delete_candidates) = refinement
-    (; reference_mass) = system.cache 
+    (; reference_mass) = system.cache
 
     set_zero!(merge_candidates)
     system_coords = current_coordinates(u, system)
@@ -52,25 +57,24 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
     # Collect merge candidates
     foreach_point_neighbor(system, system, system_coords, system_coords,
                            semi) do particle, neighbor, pos_diff, distance
-        # Do not merge a particle that was split
-        split_candidates[particle] && return
-        split_candidates[neighbor] && return
-
         # Do not merge a particle that was deleted
         delete_candidates[particle] && return
         delete_candidates[neighbor] && return
 
         particle == neighbor && return
 
-        m_a = hydrodynamic_mass(system, particle)
-        m_b = hydrodynamic_mass(system, neighbor)
-        m_max = spacing_ratio * reference_mass[particle]
-        m_a > m_max && return 
+        # Do not merge particle if distance >= (h_a + h_b) / 2
+        h_a = smoothing_length(system, particle)
+        h_b = smoothing_length(system, neighbor)
+        distance >= (h_a + h_b) / 2 && return
 
-        m_merge = m_a + m_b
-        m_max_min = min(m_max, spacing_ratio * reference_mass[neighbor])
-        m_merge >= m_max_min && return 
-        
+        # Do not merge particles if m_a + m_b >= max(m_max_a, m_max_b)
+        m_merge = hydrodynamic_mass(system, particle) + hydrodynamic_mass(system, neighbor)
+        m_merge >=
+        spacing_ratio * max(reference_mass[particle], reference_mass[neighbor]) && return
+
+        # TrixiParticles.@autoinfiltrate
+
         if merge_candidates[particle] == 0
             merge_candidates[particle] = neighbor
         else
@@ -87,7 +91,7 @@ end
 function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     (; smoothing_kernel, cache) = system
     (; merge_candidates, delete_candidates) = refinement
-    (; reference_mass) = cache 
+    (; reference_mass) = cache
 
     ELTYPE = eltype(u)
     NDIMS = ndims(system)
@@ -103,11 +107,12 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     @threaded semi for particle in eachindex(merge_candidates)
         candidate = merge_candidates[particle]
 
-        delete_candidates[particle] && return 
+        delete_candidates[particle] && return
         candidate == 0 && return
         particle != merge_candidates[candidate] && return
 
         if particle < candidate
+            # TrixiParticles.@autoinfiltrate
             m_a = hydrodynamic_mass(system, particle)
             m_b = hydrodynamic_mass(system, candidate)
 
@@ -122,29 +127,31 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
             pos_merge = (m_a * pos_a + m_b * pos_b) / m_merge
             vel_merge = (m_a * vel_a + m_b * vel_b) / m_merge
 
-            # Update position and velocity
-            set_particle_position!(u, system, particle, pos_merge) # (Eq. 32)
-            set_particle_velocity!(v, system, particle, vel_merge) # (Eq. 33)
+            # Update position and velocity (Eq. 32 and 33)
+            set_particle_position!(u, system, particle, pos_merge)
+            set_particle_velocity!(v, system, particle, vel_merge)
 
-            # Update smoothing length 
+            # Update smoothing length (Eq. 34)
             h_a = smoothing_length(system, particle)
             h_b = smoothing_length(system, candidate)
-            tmp_m = m_merge * kernel_0_1 
+            tmp_m = m_merge * kernel_0_1
             tmp_a = m_a * kernel(smoothing_kernel, norm(pos_merge - pos_a), h_a)
             tmp_b = m_b * kernel(smoothing_kernel, norm(pos_merge - pos_b), h_b)
             smoothing_length_merge = (tmp_m / (tmp_a + tmp_b))^inv_ndims
-
-            set_particle_smoothing_length!(system, particle, smoothing_length_merge) # (Eq. 34)
+            set_particle_smoothing_length!(system, particle, smoothing_length_merge)
 
             # Update mass
             set_particle_mass!(system, particle, m_merge)
 
             # Update reference mass
             reference_mass[particle] += reference_mass[candidate]
-
         else
             # Disable the particle to be deleted
             delete_candidates[particle] = true
+
+            # Set mass and velocity to zero and the position to typemax, 
+            # so the solver ignores this particle.
+            # TODO: Since we immediately resize the solver, do we actually need this?
             set_particle_mass!(system, particle, delete_mass)
             set_particle_velocity!(v, system, particle, delete_velocity)
             set_particle_position!(u, system, particle, delete_position)
@@ -153,4 +160,3 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
 
     return system
 end
-

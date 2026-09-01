@@ -518,6 +518,7 @@ end
 
     set_zero!(delta_v)
 
+    NDIMS = ndims(system)
     v_max_ = v_max(shifting, v, system)
 
     # TODO this needs to be adapted to multi-resolution.

@@ -3,7 +3,7 @@ function interact!(dv, v_particle_system, u_particle_system,
                    v_neighbor_system, u_neighbor_system,
                    particle_system::EntropicallyDampedSPHSystem,
                    neighbor_system, semi)
-    (; sound_speed, density_calculator, correction, nu_edac, particle_refinement) = particle_system
+    (; sound_speed, density_calculator, correction, nu_edac, particle_refinement, smoothing_kernel) = particle_system
 
     system_coords = current_coordinates(u_particle_system, particle_system)
     neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
@@ -65,11 +65,11 @@ function interact!(dv, v_particle_system, u_particle_system,
         grad_kernel_a = kernel_grad(smoothing_kernel, pos_diff, distance, h_a)
         grad_kernel_b = kernel_grad(smoothing_kernel, pos_diff, distance, h_b)
 
-        beta_a = get_beta(particle_system, particle, particle_system.particle_refinement)
+        beta_a = get_beta(particle_system, particle, particle_refinement)
         beta_a = abs(beta_a) < eps() ? 1.0 : beta_a
         beta_a_inv = 1.0 / beta_a
 
-        beta_b = get_beta(neighbor_system, neighbor, neighbor_system.particle_refinement)
+        beta_b = get_beta(neighbor_system, neighbor, get_refinement(neighbor_system))
         beta_b = abs(beta_b) < eps() ? 1.0 : beta_b
 
         dv_pressure, P_a,
@@ -78,7 +78,7 @@ function interact!(dv, v_particle_system, u_particle_system,
                                       p_a, p_b, rho_a, rho_b, pos_diff, distance,
                                       grad_kernel_a, grad_kernel_b,
                                       beta_a, beta_b,
-                                      particle_system.particle_refinement)
+                                      particle_refinement)
 
         dv_particle = Ref(dv_pressure)
         @inbounds dv_shifting!(dv_particle, particle_refinement,
@@ -136,8 +136,9 @@ end
                                      p_a, p_b, rho_a, rho_b, nu_edac,
                                      P_a, P_b, grad_kernel_a, grad_kernel_b, beta_a_inv,
                                      u_shift_a, refinement)
-    volume_b = m_b / rho_b
+    (; reference_density) = refinement
 
+    volume_b = m_b / rho_b
     h_a = smoothing_length(particle_system, particle)
     h_b = smoothing_length(neighbor_system, neighbor)
 
@@ -153,9 +154,11 @@ end
 
     # According to Haftu, this should be:
     # artificial_eos = (rho_0 / beta_a) * (m_b / rho_b) * sound_speed^2 * dot(v_diff, grad_kernel_a)
-    # TODO: Do we need the reference density rho_0 or is rho_a fine?
+    # TODO: Haftu uses a reference density \rho_0 here. I think this
+    # might be the initial fluid density. Maybe we need store that in
+    # the refinement struct then.  
     # Compute equation-of-state term (Eq. 6, Term 1)
-    artificial_eos = rho_a * sound_speed^2 * beta_a_inv * volume_b *
+    artificial_eos = reference_density * sound_speed^2 * beta_a_inv * volume_b *
                      dot(v_diff, grad_kernel_a)
 
     grad_kernel_avg = (grad_kernel_a + grad_kernel_b) / 2

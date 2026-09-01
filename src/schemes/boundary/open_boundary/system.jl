@@ -101,7 +101,7 @@ function OpenBoundarySystem(boundary_zones::Union{BoundaryZone, Nothing}...;
     volume = similar(initial_conditions.density)
 
     cache = (;
-             create_cache_shifting(initial_conditions, shifting_technique)...,
+             create_cache_shifting(initial_conditions, shifting_technique, nothing)...,
              create_cache_open_boundary(boundary_model, fluid_system, initial_conditions,
                                         density_diffusion, calculate_flow_rate,
                                         boundary_zones_)...)

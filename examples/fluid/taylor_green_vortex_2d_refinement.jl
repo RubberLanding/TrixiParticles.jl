@@ -12,11 +12,12 @@
 # ==========================================================================================
 
 using TrixiParticles
+using OrdinaryDiffEqCore
 using OrdinaryDiffEqLowStorageRK
 
 # ==========================================================================================
 # ==== Resolution
-particle_spacing = 0.02
+particle_spacing = 0.05
 
 # ==========================================================================================
 # ==== Experiment Setup
@@ -57,83 +58,145 @@ n_particles_xy = round(Int, box_length / particle_spacing)
 
 # ==========================================================================================
 # ==== Fluid
-wcsph = true
-
 nu = U * box_length / reynolds_number
 
 background_pressure = sound_speed^2 * fluid_density
+shifting_technique = TransportVelocityAdami(; background_pressure)
 
-smoothing_length = 1.0 * particle_spacing
+smoothing_length = 1.2 * particle_spacing
 smoothing_kernel = SchoenbergQuinticSplineKernel{2}()
 
 # To be set via `trixi_include`
 perturb_coordinates = true
 fluid = RectangularShape(particle_spacing, (n_particles_xy, n_particles_xy), (0.0, 0.0),
                          # Perturb particle coordinates to avoid stagnant streamlines without TVF
-                         coordinates_perturbation=perturb_coordinates ? 0.2 : nothing, # To avoid stagnant streamlines when not using TVF.
+                         coordinates_perturbation=perturb_coordinates ? 0.1 : nothing, # To avoid stagnant streamlines when not using TVF.
                          density=fluid_density, pressure=initial_pressure_function,
                          velocity=initial_velocity_function)
 
+refine = false
 n_particles = TrixiParticles.nparticles(fluid)
 buffer = ResizeBuffer(fluid)
+min_spacing=particle_spacing/2
 refinement = ParticleRefinement(n_particles=n_particles,
                                 spacing_ratio=1.05,
-                                min_spacing=particle_spacing,
+                                min_spacing=min_spacing,
+                                reference_density=fluid_density,
                                 resize_buffer=buffer,
                                 refinement_criteria=SolutionRefinementCriterion())
 
-# Using `SummationDensity()` with `perturb_coordinates = true` introduces noise in the simulation
-# due to bad density estimates resulting from perturbed particle positions.
-# Adami et al. 2013 use the final particle distribution from an relaxation step for the initial condition
-# and impose the analytical velocity profile.
+viscosity = ViscosityAdami(; nu)
+density_calculator = SummationDensity()
+correction = nothing
 
-density_calculator = ContinuityDensity()
-state_equation = StateEquationCole(; sound_speed, reference_density=fluid_density,
-                                   exponent=1)
-fluid_system = WeaklyCompressibleSPHSystem(fluid;
-                                           smoothing_kernel, smoothing_length,
-                                           density_calculator, state_equation,
-                                           pressure_acceleration=TrixiParticles.inter_particle_averaged_pressure,
-                                           viscosity=ViscosityAdami(; nu),
-                                           shifting_technique=nothing,
-                                           particle_refinement=refinement)
+# TrixiParticles.@autoinfiltrate
+idx = 55
+
+fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                            sound_speed, density_calculator,
+                                            shifting_technique,
+                                            viscosity, 
+                                            correction)
+
+if refine 
+    fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                            sound_speed, density_calculator,
+                                            shifting_technique,
+                                            viscosity, 
+                                            correction,
+                                            particle_refinement=refinement)
+end 
 
 # ==========================================================================================
 # ==== Simulation
 periodic_box = PeriodicBox(min_corner=[0.0, 0.0], max_corner=[box_length, box_length])
 semi = Semidiscretization(fluid_system,
-                          neighborhood_search=GridNeighborhoodSearch{2}(; periodic_box))
+                          neighborhood_search=TrivialNeighborhoodSearch{2}(; periodic_box))
 
 ode = semidiscretize(semi, tspan)
 
 info_callback = InfoCallback(interval=100)
 
-saving_callback = SolutionSavingCallback(dt=0.02)
-
-refinement_callback = ParticleRefinementCallback(interval=180)
+saving_callback = SolutionSavingCallback(interval=1)
 
 pp_callback = nothing
 
-using Infiltrator
-using SciMLBase: DiscreteCallback, terminate!
+refinement_callback = nothing 
+if refine
+    refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.iter == 10,
+                                           (integrator) -> begin
+                                           v_ode = integrator.u.x[1]
+                                           u_ode = integrator.u.x[2]
+                                           semi = integrator.p.semi
+                                           system = semi.systems[1]
 
-function explosion_condition(u, t, integrator)
-    v_ode, u_ode = integrator.u.x
-    return any(isnan, u_ode) || any(x -> abs(x) > 50.0, u_ode) || any(isnan, v_ode)
-end
+                                           # Allocate temporary backup arrays of the exact same type and size
+                                           v_tmp = similar(v_ode)
+                                           u_tmp = similar(u_ode)
 
-function explosion_affect!(integrator)
-    println("\n--- EXPLOSION DETECTED AT t = $(integrator.t), STEP = $(integrator.iter) ---")
-    @infiltrate
-    terminate!(integrator) # <-- This forces the ODE solver to abort immediately
-end
+                                           # Refine the fluid system
+                                           TrixiParticles.reset_refinement!(system, semi)
+                                           TrixiParticles.apply_refinement_criteria!(system, v_ode, u_ode, semi)
+                                           TrixiParticles.update_particle_spacing(system, v_ode, u_ode, semi)
+                                           TrixiParticles.split_particles!(system, v_ode, u_ode, semi)
+                                           TrixiParticles.update_nparticles_new!(system)
+                                           TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
-trap_callback = DiscreteCallback(explosion_condition, explosion_affect!,
-                                 save_positions=(false, false))
+                                           TrixiParticles.reset_resize_buffer!(system.particle_refinement.resize_buffer, system)
+                                           TrixiParticles.merge_particles!(system, v_ode, u_ode, semi)
+                                           TrixiParticles.update_nparticles_new!(system)
+                                           TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
-# Add trap_callback to your existing CallbackSet
-callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(),
-                        refinement_callback, trap_callback)
+                                           TrixiParticles.update_smoothing_lengths!(system, v_ode, u_ode, semi)
+                                           TrixiParticles.shift_particles!(system, v_ode, u_ode, semi, integrator.dt)
+
+                                           resize!(integrator,
+                                                   (length(v_ode), length(u_ode)))
+
+                                           SciMLBase.u_modified!(integrator, true)
+
+                                        #    TrixiParticles.@autoinfiltrate
+                                       end,
+                                       save_positions=(false, false))
+
+end 
+
+save_interval = 0.05
+next_save_time = [0.0]
+frame_counter = [0] # Integer frame counter
+
+vtk_callback = DiscreteCallback(
+    (u, t, integrator) -> t >= next_save_time[1],
+    (integrator) -> begin
+        (; t) = integrator
+        v_ode = integrator.u.x[1]
+        u_ode = integrator.u.x[2]
+        semi = integrator.p.semi
+        system = semi.systems[1]
+
+        interpolation_min = [0.0, 0.0]
+        interpolation_max = [box_length, box_length]
+        interpolation_spacing = min_spacing / 4
+
+        # Put the text before the number for automatic Paraview grouping and pad the counter to 4 digits
+        refine_str = refine ? "ref" : "noref"
+        frame_str = lpad(frame_counter[1], 4, '0') 
+        file_name = "taylor_greene_$(refine_str)_$(frame_str)"
+
+        TrixiParticles.interpolate_plane_2d_vtk(
+            interpolation_min, interpolation_max, interpolation_spacing,
+            semi, system, v_ode, u_ode; 
+            filename=file_name
+        )
+
+        # Increment both the timer and the frame counter
+        next_save_time[1] += save_interval
+        frame_counter[1] += 1
+    end,
+    save_positions=(false, false)
+)
+
+callbacks = CallbackSet(info_callback, saving_callback, pp_callback, UpdateCallback(), refinement_callback, vtk_callback)
 
 dt_max = min(smoothing_length / 4 * (sound_speed + U), smoothing_length^2 / (8 * nu))
 
@@ -142,3 +205,4 @@ sol = solve(ode, RDPK3SpFSAL49(),
             abstol=1e-8, # Default abstol is 1e-6 (may need to be tuned to prevent boundary penetration)
             reltol=1e-4, # Default reltol is 1e-3 (may need to be tuned to prevent boundary penetration)
             dtmax=dt_max, save_everystep=false, callback=callbacks);
+

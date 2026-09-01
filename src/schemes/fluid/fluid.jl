@@ -120,6 +120,8 @@ function smoothing_length(system::AbstractFluidSystem, refinement, particle)
     return system.smoothing_length[particle]
 end
 
+@inline spacing_to_smoothing_length(system::AbstractFluidSystem, particle_spacing) = system.particle_refinement.smoothing_length_factor * particle_spacing
+
 function initial_smoothing_length(system::AbstractFluidSystem)
     return initial_smoothing_length(system, system.particle_refinement)
 end
@@ -138,9 +140,15 @@ end
 
 @inline particle_spacing(system, ::Nothing, _) = system.initial_condition.particle_spacing
 
+# Compute the effective particle spacing (Δs = h / C) for a given particle.
+# Note: This yields the true spatial resolution only after the global smoothing 
+# length update (Eq. 35) is applied during refinement. Calling this during refinement, between 
+# splitting and merging, will return inaccurate spacings, as daughter particles 
+# temporarily use artificially scaled smoothing lengths to guarantee merging.
 @inline function particle_spacing(system, refinement, particle)
-    (; smoothing_length_factor) = refinement
-    return smoothing_length(system, particle) / smoothing_length_factor
+    (; reference_density) = refinement
+
+    return (hydrodynamic_mass(system, particle) / reference_density)^(1 / ndims(system))
 end
 
 function write_u0!(u0, system::AbstractFluidSystem)
@@ -394,6 +402,9 @@ end
 function available_data(::AbstractFluidSystem)
     return (:coordinates, :velocity, :mass, :density, :pressure, :acceleration)
 end
+
+@inline get_refinement(system) = nothing
+@inline get_refinement(system::AbstractFluidSystem) = system.particle_refinement
 
 include("pressure_acceleration.jl")
 include("viscosity.jl")
