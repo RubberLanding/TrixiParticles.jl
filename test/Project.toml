@@ -16,7 +16,7 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TrixiTest = "0a316866-cbd0-4425-8bcb-08103b2c1f26"
 
 [compat]
-CSV = "0.10"
+CSV = "0.10, 1"
 CairoMakie = "0.13, 0.15"
 DataFrames = "1.6"
 GLM = "1.9"
