@@ -30,21 +30,16 @@ end
         spacing_min, spacing_max,
         spacing_avg = min_max_avg_spacing(fluid_system, semi, u_ode, system_coords,
                                           particle)
-        # TrixiParticles.@autoinfiltrate
         # TODO: Check for `spacing_min == 0.0` to avoid division-by-zero.
         if spacing_max / spacing_min < spacing_ratio_3
             new_spacing = min(spacing_max, spacing_ratio * spacing_min)
-            # TrixiParticles.@autoinfiltrate
         else
             new_spacing = spacing_avg
-            # TrixiParticles.@autoinfiltrate
         end
 
         reference_mass[particle] = current_density(v, fluid_system, particle) *
                                    new_spacing^NDIMS
     end
-
-    # TrixiParticles.@autoinfiltrate
 
     return fluid_system
 end

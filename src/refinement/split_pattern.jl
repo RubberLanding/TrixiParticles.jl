@@ -25,7 +25,7 @@ struct CubicSplitting{ELTYPE}
     end
 end
 
-@inline function nchilds(system, refinement_pattern::CubicSplitting)
+@inline function nchilds(refinement_pattern::CubicSplitting)
     return 4 + refinement_pattern.center_particle
 end
 
@@ -53,7 +53,7 @@ struct TriangularSplitting{ELTYPE}
     end
 end
 
-@inline function nchilds(system::AbstractSystem{2}, refinement_pattern::TriangularSplitting)
+@inline function nchilds(refinement_pattern::TriangularSplitting)
     return 3 + refinement_pattern.center_particle
 end
 
@@ -88,6 +88,6 @@ struct HexagonalSplitting{ELTYPE}
     end
 end
 
-@inline function nchilds(system::AbstractSystem{2}, refinement_pattern::HexagonalSplitting)
+@inline function nchilds(refinement_pattern::HexagonalSplitting)
     return 6 + refinement_pattern.center_particle
 end

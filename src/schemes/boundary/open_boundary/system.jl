@@ -294,6 +294,10 @@ end
     return v
 end
 
+@inline function set_particle_mass!(system::OpenBoundarySystem, particle, mass)
+    system.mass[particle] = mass
+end
+
 function calculate_dt(v_ode, u_ode, cfl_number, system::OpenBoundarySystem, semi)
     # Open boundaries don't affect the timestep calculation
     return Inf
@@ -551,6 +555,10 @@ end
     pressure = current_pressure(v_old, system_old, particle_old)
     set_particle_pressure!(v_new, system_new, particle_new, pressure)
 
+    # Transfer mass
+    mass = hydrodynamic_mass(system_old, particle_old)
+    set_particle_mass!(system_new, particle_new, mass)
+
     nonperiodic_coords = current_coords(u_old, system_old, particle_old)
     particle_coords = PointNeighbors.periodic_coords(nonperiodic_coords, periodic_box)
 
@@ -622,6 +630,7 @@ end
 # The face opposite to this transition face is a free surface.
 @inline function modify_shifting_at_free_surfaces!(system::OpenBoundarySystem, u, semi)
     (; fluid_system, cache) = system
+    NDIMS = ndims(system)
 
     @threaded semi for particle in each_integrated_particle(system)
         boundary_zone = current_boundary_zone(system, particle)
@@ -643,8 +652,9 @@ end
             # The free-surface region is the layer within one compact support of the
             # free surface. Shifting is disabled there to avoid shifting particles with
             # incomplete support.
-            for dim in 1:ndims(system)
-                cache.delta_v[dim, particle] = zero(eltype(system))
+            for dim in 1:NDIMS
+                idx = (particle - 1) * NDIMS + dim
+                cache.delta_v[idx] = zero(eltype(system))
             end
         elseif dist_free_surface < free_surface_region_width + ramp_width
             # Between one and two compact supports from the free surface, shifting is
@@ -659,8 +669,9 @@ end
             shifting_weight = smoothing_kernel(system, dist_from_ramp_end, particle) /
                               kernel_max
             delta_v_ramped = delta_v(system, particle) * shifting_weight
-            for dim in 1:ndims(system)
-                cache.delta_v[dim, particle] = delta_v_ramped[dim]
+            for dim in 1:NDIMS
+                idx = (particle - 1) * NDIMS + dim
+                cache.delta_v[idx] = delta_v_ramped[dim]
             end
         end
     end

@@ -45,6 +45,8 @@ function interact!(dv, v_particle_system, u_particle_system,
         v_a = @inbounds current_velocity(v_particle_system, particle_system, particle)
         v_b = @inbounds current_velocity(v_neighbor_system, neighbor_system, neighbor)
 
+
+
         p_a = @inbounds current_pressure(v_particle_system, particle_system, particle)
         p_b = @inbounds current_pressure(v_neighbor_system, neighbor_system, neighbor)
 
@@ -80,14 +82,17 @@ function interact!(dv, v_particle_system, u_particle_system,
                                       beta_a, beta_b,
                                       particle_refinement)
 
+        # TrixiParticles.@autoinfiltrate
+
         dv_particle = Ref(dv_pressure)
-        @inbounds dv_shifting!(dv_particle, particle_refinement,
-                               shifting_technique(particle_system),
-                               particle_system, neighbor_system,
-                               v_particle_system, v_neighbor_system,
-                               particle, neighbor, m_a, m_b, rho_a, rho_b, v_a, v_b,
-                               pos_diff, distance,
-                               grad_kernel_a, grad_kernel_b, beta_a, beta_b, correction)
+        @inbounds TrixiParticles.dv_shifting!(dv_particle, 
+                                              shifting_technique(particle_system),
+                                              particle_system, neighbor_system,
+                                              v_particle_system, v_neighbor_system,
+                                              particle, neighbor, m_a, m_b, rho_a, rho_b, v_a, v_b,
+                                              pos_diff, distance,
+                                              grad_kernel_a, correction)
+        # TrixiParticles.@autoinfiltrate
 
         grad_kernel_avg = (grad_kernel_a + grad_kernel_b) / 2
         @inbounds dv_viscosity!(dv_particle, particle_refinement, particle_system,
@@ -96,10 +101,21 @@ function interact!(dv, v_particle_system, u_particle_system,
                                 particle, neighbor, pos_diff, distance,
                                 sound_speed, m_a, m_b, rho_a, rho_b,
                                 v_a, v_b, grad_kernel_a, grad_kernel_avg, beta_a_inv)
+        # TrixiParticles.@autoinfiltrate
 
         @inbounds adhesion_force!(dv_particle, surface_tension_a, particle_system,
                                   neighbor_system,
                                   particle, neighbor, pos_diff, distance)
+        # TrixiParticles.@autoinfiltrate
+
+        if norm(dv_particle[]) > 100000.0 # Catch a massive acceleration spike
+            println("🚨 EXPLOSIVE ACCELERATION DETECTED!")
+            println("  Particle ID: ", particle, " | Neighbor ID: ", neighbor)
+            println("  Distance: ", distance, " | h_a: ", h_a, " | h_b: ", h_b)
+            println("  dv_pressure: ", dv_pressure)
+            println("  rho_a: ", rho_a, " | rho_b: ", rho_b)
+            TrixiParticles.@autoinfiltrate
+        end
 
         for i in 1:ndims(particle_system)
             @inbounds dv[i, particle] += dv_particle[][i]
@@ -116,6 +132,7 @@ function interact!(dv, v_particle_system, u_particle_system,
                             grad_kernel_a, grad_kernel_b, beta_a_inv, u_shift_a,
                             particle_refinement)
         drho_particle = Ref(zero(rho_a))
+        # TrixiParticles.@autoinfiltrate
 
         # TODO If variable smoothing_length is used, this should use the neighbor smoothing length
         # Propagate `@inbounds` to the continuity equation, which accesses particle data
@@ -123,6 +140,7 @@ function interact!(dv, v_particle_system, u_particle_system,
                                        particle_system, neighbor_system,
                                        particle, neighbor, pos_diff, distance,
                                        m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
+        # TrixiParticles.@autoinfiltrate
 
         @inbounds write_drho_particle!(dv, density_calculator, drho_particle, particle)
     end

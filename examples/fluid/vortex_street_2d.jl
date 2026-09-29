@@ -14,10 +14,13 @@ using OrdinaryDiffEqLowStorageRK
 
 # ==========================================================================================
 # ==== Resolution
-particle_spacing_factor = 0.1 # Resolution in the paper is `0.01` (5M particles)
+particle_spacing_factor = 0.5 # Resolution in the paper is `0.01` (5M particles)
 
 cylinder_diameter = 0.1
 particle_spacing = particle_spacing_factor * cylinder_diameter
+
+spacing_ratio = 2
+min_spacing = particle_spacing / spacing_ratio
 
 # Make sure that the kernel support of fluid particles at a boundary is always fully sampled
 boundary_layers = 4
@@ -49,7 +52,7 @@ pipe = RectangularTank(particle_spacing, domain_size, domain_size, fluid_density
                        n_layers=boundary_layers,
                        velocity=prescribed_velocity * flow_direction,
                        faces=(false, false, true, true),
-                       coordinates_eltype=Float64)
+                       coordinates_eltype=Float64, spacing_ratio)
 
 min_coords_inlet = (-open_boundary_layers * particle_spacing, 0.0)
 inlet = RectangularTank(particle_spacing, open_boundary_size, open_boundary_size,
@@ -57,7 +60,7 @@ inlet = RectangularTank(particle_spacing, open_boundary_size, open_boundary_size
                         velocity=prescribed_velocity * flow_direction,
                         min_coordinates=min_coords_inlet,
                         faces=(false, false, true, true),
-                        coordinates_eltype=Float64)
+                        coordinates_eltype=Float64, spacing_ratio)
 
 min_coords_outlet = (pipe.fluid_size[1], 0.0)
 outlet = RectangularTank(particle_spacing, open_boundary_size, open_boundary_size,
@@ -65,36 +68,36 @@ outlet = RectangularTank(particle_spacing, open_boundary_size, open_boundary_siz
                          velocity=prescribed_velocity * flow_direction,
                          min_coordinates=min_coords_outlet,
                          faces=(false, false, true, true),
-                         coordinates_eltype=Float64)
+                         coordinates_eltype=Float64, spacing_ratio)
 
 n_buffer_particles = nparticles(inlet.fluid)
 
 cylinder_center = (5 * cylinder_diameter, domain_size[2] / 2)
-cylinder = SphereShape(particle_spacing, cylinder_diameter / 2,
+cylinder = SphereShape(min_spacing, cylinder_diameter / 2,
                        cylinder_center, fluid_density; sphere_type=RoundSphere())
 
 fluid = setdiff(pipe.fluid, cylinder)
 
 # ==========================================================================================
 # ==== Fluid
-smoothing_length = 1.5 * particle_spacing
+smoothing_length_ratio = 1.5
+smoothing_length = smoothing_length_ratio * particle_spacing
 smoothing_kernel = WendlandC2Kernel{2}()
 
-fluid_density_calculator = ContinuityDensity()
+fluid_density_calculator = SummationDensity()
 
 kinematic_viscosity = prescribed_velocity * cylinder_diameter / reynolds_number
-
-state_equation = StateEquationCole(; sound_speed, reference_density=fluid_density,
-                                   exponent=1)
 viscosity = ViscosityAdami(nu=kinematic_viscosity)
-density_diffusion = DensityDiffusionMolteniColagrossi(delta=0.1)
 
-shifting_technique = ParticleShiftingTechnique(; sound_speed_factor=0.2, v_max_factor=0)
+background_pressure = sound_speed^2 * fluid_density
+shifting_technique = TransportVelocityAdami(; background_pressure)
 
-fluid_system = WeaklyCompressibleSPHSystem(fluid; smoothing_kernel, smoothing_length,
+
+fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                           sound_speed,
                                            density_calculator=fluid_density_calculator,
-                                           state_equation, density_diffusion, viscosity,
-                                           pressure_acceleration=tensile_instability_control,
+                                           viscosity,
+                                           pressure_acceleration=nothing,
                                            shifting_technique,
                                            buffer_size=n_buffer_particles)
 

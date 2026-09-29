@@ -100,14 +100,14 @@ using OrdinaryDiffEqLowStorageRK
 
     # TrixiParticles.@autoinfiltrate
     TrixiParticles.split_particles!(fluid_system, v_ode, u_ode, semi)
-    TrixiParticles.@autoinfiltrate
+    # TrixiParticles.@autoinfiltrate
     TrixiParticles.update_nparticles_new!(fluid_system)
     TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
     # TrixiParticles.@autoinfiltrate
     TrixiParticles.reset_resize_buffer!(fluid_system.particle_refinement.resize_buffer, fluid_system)
     TrixiParticles.merge_particles!(fluid_system, v_ode, u_ode, semi)
-    TrixiParticles.@autoinfiltrate
+    # TrixiParticles.@autoinfiltrate
     TrixiParticles.update_nparticles_new!(fluid_system)
     TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
@@ -130,6 +130,6 @@ using OrdinaryDiffEqLowStorageRK
     ic_after_shift = InitialCondition(coordinates=u, density=1000.0, mass=fluid_system.smoothing_length, pressure=ps_after_shift)
     TrixiParticles.trixi2vtk(ic_after_shift, filename="ic_after_shift")
 
-    TrixiParticles.@autoinfiltrate
+    # TrixiParticles.@autoinfiltrate
 end 
 

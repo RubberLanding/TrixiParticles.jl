@@ -636,6 +636,21 @@ end
                                                       neighbor, pos_diff, distance,
                                                       viscosity, cache, pressure,
                                                       pressure_offset)
+    boundary_pressure_inner!(boundary_model, density_calculator, system,
+                             neighbor_system, v, v_neighbor_system,
+                             particle, neighbor, pos_diff, distance,
+                             viscosity, cache, pressure, pressure_offset,
+                             get_refinement(neighbor_system))
+end
+
+@propagate_inbounds function boundary_pressure_inner!(boundary_model,
+                                                      boundary_density_calculator, system,
+                                                      neighbor_system::Union{AbstractFluidSystem,
+                                                                             OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang}},
+                                                      v, v_neighbor_system, particle,
+                                                      neighbor, pos_diff, distance,
+                                                      viscosity, cache, pressure,
+                                                      pressure_offset, refinement::Nothing)
     density_neighbor = current_density(v_neighbor_system, neighbor_system, neighbor)
 
     # Fluid pressure term
@@ -657,6 +672,47 @@ end
                     hydrostatic_pressure
 
     kernel_weight = smoothing_kernel(boundary_model, distance, particle)
+
+    pressure[particle] += sum_pressures * kernel_weight
+    cache.volume[particle] += kernel_weight
+
+    interpolate_fluid_velocity!(cache, viscosity, neighbor_system, v_neighbor_system,
+                                kernel_weight, particle, neighbor)
+end
+
+@propagate_inbounds function boundary_pressure_inner!(boundary_model,
+                                                      boundary_density_calculator, system,
+                                                      neighbor_system::Union{AbstractFluidSystem,
+                                                                             OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang}},
+                                                      v, v_neighbor_system, particle,
+                                                      neighbor, pos_diff, distance,
+                                                      viscosity, cache, pressure,
+                                                      pressure_offset, refinement)
+    density_neighbor = current_density(v_neighbor_system, neighbor_system, neighbor)
+
+    # Fluid pressure term
+    fluid_pressure = current_pressure(v_neighbor_system, neighbor_system, neighbor)
+
+    # Hydrostatic pressure term from fluid and boundary acceleration
+    # TODO: rename acceleration and add a function `system_external_acceleration`
+    resulting_acceleration = acceleration_source(neighbor_system) -
+                             current_acceleration(system, particle)
+    hydrostatic_pressure = dot(resulting_acceleration, density_neighbor * pos_diff)
+
+    # Additional dynamic pressure term (only with `BernoulliPressureExtrapolation`)
+    dynamic_pressure_ = dynamic_pressure(boundary_density_calculator,
+                                         v, v_neighbor_system, system, neighbor_system,
+                                         particle, neighbor, pos_diff, distance,
+                                         density_neighbor)
+
+    sum_pressures = pressure_offset + fluid_pressure + dynamic_pressure_ +
+                    hydrostatic_pressure
+
+    # Variable smoothing length kernel (Eq. 19)
+    h_w = smoothing_length(system, particle)
+    h_f = smoothing_length(neighbor_system, neighbor)
+    h_wf = 0.5 * (h_w + h_f)
+    kernel_weight = kernel(boundary_model.smoothing_kernel, distance, h_wf)
 
     pressure[particle] += sum_pressures * kernel_weight
     cache.volume[particle] += kernel_weight

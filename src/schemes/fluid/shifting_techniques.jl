@@ -48,64 +48,6 @@ function update_shifting!(system, shifting, v, u, v_ode, u_ode, semi)
     return system
 end
 
-@inline function dv_shifting!(dv_particle, ::Nothing, shifting, system, neighbor_system,
-                              v_system, v_neighbor_system, particle, neighbor,
-                              m_a, m_b, rho_a, rho_b, v_a, v_b, pos_diff, distance,
-                              grad_kernel_a, grad_kernel_b, beta_a, beta_b, correction)
-    return @inbounds dv_shifting!(dv_particle, shifting,
-                                  system, neighbor_system,
-                                  v_system, v_neighbor_system,
-                                  particle, neighbor, m_a, m_b, rho_a, rho_b, v_a, v_b,
-                                  pos_diff, distance, grad_kernel_a, correction)
-end
-
-@inline function dv_shifting!(dv_particle, refinement, shifting, system, neighbor_system,
-                              v_system, v_neighbor_system, particle, neighbor,
-                              m_a, m_b, rho_a, rho_b, v_a, v_b, pos_diff, distance,
-                              grad_kernel_a, grad_kernel_b, beta_a, beta_b, correction)
-    return @inbounds dv_shifting!(dv_particle, shifting,
-                                  system, neighbor_system,
-                                  v_system, v_neighbor_system,
-                                  particle, neighbor, m_a, m_b, rho_a, rho_b, v_a, v_b,
-                                  pos_diff, distance,
-                                  grad_kernel_a, grad_kernel_b, beta_a, beta_b)
-end
-
-@propagate_inbounds function dv_shifting!(dv_particle, shifting,
-                                          system, neighbor_system,
-                                          v_system, v_neighbor_system, particle, neighbor,
-                                          m_a, m_b, rho_a, rho_b, v_a, v_b, pos_diff,
-                                          distance,
-                                          grad_kernel_a, grad_kernel_b, beta_a, beta_b)
-    u_shift_a = delta_v(system, particle)
-    u_shift_b = delta_v(neighbor_system, neighbor)
-
-    # Compute A_a and A_b (Eq. 13)
-    A_a = (1.0 / (rho_a * beta_a)) * v_a * dot(u_shift_a, grad_kernel_a)
-    A_b = (1.0 / (rho_b * beta_b)) * v_b * dot(u_shift_b, grad_kernel_b)
-
-    # Compute advection term (Eq. 12, Term 1) 
-    term_advection = -m_b * (A_a + A_b)
-
-    # Compute divergence correction (Eq. 12, Term 3)
-    u_shift_diff = u_shift_a - u_shift_b
-    term_divergence = -(1.0 / beta_a) * (m_b / rho_b) * dot(u_shift_diff, grad_kernel_a) *
-                      v_a
-
-    dv_particle[] += term_advection + term_divergence
-    
-    return dv_particle
-end
-
-@propagate_inbounds function dv_shifting!(dv_particle, shifting::Nothing,
-                                          system, neighbor_system,
-                                          v_system, v_neighbor_system, particle, neighbor,
-                                          m_a, m_b, rho_a, rho_b, v_a, v_b, pos_diff,
-                                          distance,
-                                          grad_kernel_a, grad_kernel_b, beta_a, beta_b)
-    return dv_particle
-end
-
 # Additional term in the momentum equation due to the shifting technique
 @inline function dv_shifting!(dv_particle, shifting, system, neighbor_system,
                               v_system, v_neighbor_system, particle, neighbor,

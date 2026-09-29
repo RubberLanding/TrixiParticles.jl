@@ -398,7 +398,7 @@ end
     (; cache) = system
     (; beta) = cache
     d = ndims(system)
-    
+
     # Multiply the accumulated sum by -1 / (rho_i * d) (Eq. 7)
     for particle in each_integrated_particle(system)
         rho_i = current_density(v, system, particle)

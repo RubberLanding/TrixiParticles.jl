@@ -17,9 +17,8 @@ end
 
 @inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
                                   semi; merge_iter=3)
+    (; buffer) = system
     (; delete_candidates) = refinement
-    (; n_delete_particles) = refinement.resize_buffer
-    (; candidate_flags) = system.cache
 
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
@@ -31,24 +30,26 @@ end
 
     # Merge the particles
     for _ in 1:merge_iter
+        # TrixiParticles.@autoinfiltrate
         collect_merge_candidates!(system, refinement, v, u, semi)
+        # TrixiParticles.@autoinfiltrate
         apply_merging!(system, refinement, v, u, semi)
+        # TrixiParticles.@autoinfiltrate
+
+        # Update the nhs
+        update_system_buffer!(buffer)
+        neighborhood_search = get_neighborhood_search(system, semi)
+        update_nhs!(neighborhood_search, system, system, u, u, semi)
+        # TrixiParticles.@autoinfiltrate
     end
 
-    # Update the counter for the particles to delete
-    @threaded semi for particle in eachparticle(system)
-        candidate_flags[particle] = delete_candidates[particle] ? 1 : 0
-    end
-
-    TrixiParticles.@autoinfiltrate
-
-    fill!(n_delete_particles, sum(candidate_flags))
+    # TrixiParticles.@autoinfiltrate
 
     return system
 end
 
 function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi)
-    (; spacing_ratio, split_candidates, merge_candidates, delete_candidates) = refinement
+    (; spacing_ratio, merge_candidates, delete_candidates) = refinement
     (; reference_mass) = system.cache
 
     set_zero!(merge_candidates)
@@ -99,10 +100,6 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     inv_ndims = one(ELTYPE) / NDIMS
     kernel_0_1 = kernel(smoothing_kernel, zero(ELTYPE), one(ELTYPE))
 
-    delete_mass = zero(ELTYPE)
-    delete_velocity = zero(SVector{NDIMS, ELTYPE})
-    delete_position = SVector{NDIMS, ELTYPE}(ntuple(_ -> typemax(ELTYPE), NDIMS))
-
     # Merge and delete particles
     @threaded semi for particle in eachindex(merge_candidates)
         candidate = merge_candidates[particle]
@@ -145,16 +142,11 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
 
             # Update reference mass
             reference_mass[particle] += reference_mass[candidate]
-        else
-            # Disable the particle to be deleted
-            delete_candidates[particle] = true
 
-            # Set mass and velocity to zero and the position to typemax, 
-            # so the solver ignores this particle.
-            # TODO: Since we immediately resize the solver, do we actually need this?
-            set_particle_mass!(system, particle, delete_mass)
-            set_particle_velocity!(v, system, particle, delete_velocity)
-            set_particle_position!(u, system, particle, delete_position)
+            # Let this thread mark the other particle as deleted 
+            # and deactivate it to avoid race condition 
+            delete_candidates[candidate] = true
+            deactivate_particle!(system, candidate, v, u)
         end
     end
 

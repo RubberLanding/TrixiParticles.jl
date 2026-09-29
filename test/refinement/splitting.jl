@@ -60,8 +60,7 @@ using Test
     # Force specific particles to trigger the split condition
     # by artificially reducing their reference mass below the dynamic threshold.
     test_indices = [1, 2, 3]
-    n_childs_exclude_center = TrixiParticles.nchilds(fluid_system,
-                                                     fluid_system.particle_refinement.splitting_pattern) -
+    n_childs_exclude_center = TrixiParticles.nchilds(fluid_system.particle_refinement.splitting_pattern) -
                               1
     n_expected_new_particles = n_childs_exclude_center * length(test_indices)
 
@@ -95,8 +94,7 @@ using Test
 
     @testset "Test `apply_splitting!`" begin
         for (idx, particle) in enumerate(test_indices)
-            expected_mass = old_masses[idx] / TrixiParticles.nchilds(fluid_system,
-                                                   refinement.splitting_pattern)
+            expected_mass = old_masses[idx] / TrixiParticles.nchilds(refinement.splitting_pattern)
             expected_h = old_h[idx] * refinement.splitting_pattern.alpha
 
             @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system, particle),
