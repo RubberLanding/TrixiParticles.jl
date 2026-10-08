@@ -61,7 +61,7 @@ n_particles_xy = round(Int, box_length / particle_spacing)
 nu = U * box_length / reynolds_number
 
 background_pressure = sound_speed^2 * fluid_density
-shifting_technique = TransportVelocityAdami(; background_pressure)
+shifting_technique = ConsistentShiftingSun2019(; sound_speed_factor=0.1)
 
 smoothing_length = 1.2 * particle_spacing
 smoothing_kernel = SchoenbergQuinticSplineKernel{2}()
@@ -74,44 +74,59 @@ fluid = RectangularShape(particle_spacing, (n_particles_xy, n_particles_xy), (0.
                          density=fluid_density, pressure=initial_pressure_function,
                          velocity=initial_velocity_function)
 
-refine = false
+refine = true
 n_particles = TrixiParticles.nparticles(fluid)
-buffer = ResizeBuffer(fluid)
-min_spacing=particle_spacing/2
-refinement = ParticleRefinement(n_particles=n_particles,
-                                spacing_ratio=1.05,
-                                min_spacing=min_spacing,
+
+x_min = 0.35
+x_max = 0.65
+y_min = 0.35
+y_max = 0.65
+box_logic = (system, particle, v, u,
+             semi) -> begin
+    pos = TrixiParticles.current_coords(u, system, particle)
+    return (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
+end
+
+box_criterion = SolutionRefinementCriterion(box_logic)
+refinement_criteria = (box_criterion,)
+
+refinement = ParticleRefinement(; spacing_ratio=1.05,
+                                min_spacing=particle_spacing / 1.5,
                                 reference_density=fluid_density,
-                                resize_buffer=buffer,
-                                refinement_criteria=SolutionRefinementCriterion())
+                                refinement_criteria)
+n_childs = TrixiParticles.nchilds(refinement.splitting_pattern)
+
+# n_buffer_particles = ceil(Int32,
+#                         12 * n_childs * (x_max - x_min) *
+#                         (y_max - y_min) / particle_spacing^2)
+n_buffer_particles = 1
 
 viscosity = ViscosityAdami(; nu)
 density_calculator = SummationDensity()
 correction = nothing
 
-# TrixiParticles.@autoinfiltrate
-idx = 55
-
-fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
-                                            sound_speed, density_calculator,
-                                            shifting_technique,
-                                            viscosity, 
-                                            correction)
-
-if refine 
-    fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
-                                            sound_speed, density_calculator,
-                                            shifting_technique,
-                                            viscosity, 
-                                            correction,
-                                            particle_refinement=refinement)
-end 
+fluid_system = refine ?
+               EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                           sound_speed,
+                                           density_calculator,
+                                           viscosity,
+                                           shifting_technique,
+                                           particle_refinement=refinement,
+                                           buffer_size=n_buffer_particles) :
+               EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                           sound_speed,
+                                           density_calculator,
+                                           viscosity,
+                                           pressure_acceleration=nothing,
+                                           shifting_technique,
+                                           buffer_size=n_buffer_particles)
 
 # ==========================================================================================
 # ==== Simulation
 periodic_box = PeriodicBox(min_corner=[0.0, 0.0], max_corner=[box_length, box_length])
 semi = Semidiscretization(fluid_system,
                           neighborhood_search=TrivialNeighborhoodSearch{2}(; periodic_box))
+# TrixiParticles.@autoinfiltrate
 
 ode = semidiscretize(semi, tspan)
 
@@ -121,88 +136,116 @@ saving_callback = SolutionSavingCallback(interval=1)
 
 pp_callback = nothing
 
-refinement_callback = nothing 
-if refine
-    refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.iter == 10,
-                                           (integrator) -> begin
-                                           v_ode = integrator.u.x[1]
-                                           u_ode = integrator.u.x[2]
-                                           semi = integrator.p.semi
-                                           system = semi.systems[1]
+refinement_callback = nothing
+v_tmp = similar(ode.u0.x[1])
+u_tmp = similar(ode.u0.x[2])
 
-                                           # Allocate temporary backup arrays of the exact same type and size
-                                           v_tmp = similar(v_ode)
-                                           u_tmp = similar(u_ode)
+function apply_refinement!(integrator)
+    v_ode = integrator.u.x[1]
+    u_ode = integrator.u.x[2]
+    semi = integrator.p.semi
+    system = semi.systems[1]
+    length_u_before = length(u_ode)
 
-                                           # Refine the fluid system
-                                           TrixiParticles.reset_refinement!(system, semi)
-                                           TrixiParticles.apply_refinement_criteria!(system, v_ode, u_ode, semi)
-                                           TrixiParticles.update_particle_spacing(system, v_ode, u_ode, semi)
-                                           TrixiParticles.split_particles!(system, v_ode, u_ode, semi)
-                                           TrixiParticles.update_nparticles_new!(system)
-                                           TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
+    TrixiParticles.reset_refinement!(system,
+                                     semi)
+    TrixiParticles.compact_system!(system, v_ode,
+                                   u_ode, semi)
+    neighborhood_search = TrixiParticles.get_neighborhood_search(system,
+                                                                 semi)
+    u = TrixiParticles.wrap_u(u_ode, system,
+                              semi)
+    TrixiParticles.update_nhs!(neighborhood_search,
+                               system,
+                               system, u, u,
+                               semi)
 
-                                           TrixiParticles.reset_resize_buffer!(system.particle_refinement.resize_buffer, system)
-                                           TrixiParticles.merge_particles!(system, v_ode, u_ode, semi)
-                                           TrixiParticles.update_nparticles_new!(system)
-                                           TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
+    TrixiParticles.apply_refinement_criteria!(system,
+                                              v_ode,
+                                              u_ode,
+                                              semi)
 
-                                           TrixiParticles.update_smoothing_lengths!(system, v_ode, u_ode, semi)
-                                           TrixiParticles.shift_particles!(system, v_ode, u_ode, semi, integrator.dt)
+    TrixiParticles.update_particle_spacing(system,
+                                           v_ode,
+                                           u_ode,
+                                           semi)
 
-                                           resize!(integrator,
-                                                   (length(v_ode), length(u_ode)))
+    TrixiParticles.split_particles!(semi, v_ode,
+                                    u_ode, v_tmp,
+                                    u_tmp)
 
-                                           SciMLBase.u_modified!(integrator, true)
+    # TrixiParticles.merge_particles!(system,
+    #                                 v_ode, u_ode,
+    #                                 semi)
+    # TrixiParticles.compact_system!(system, v_ode,
+    #                                u_ode, semi)
+    # TrixiParticles.update_nhs!(semi, u_ode)
 
-                                        #    TrixiParticles.@autoinfiltrate
-                                       end,
-                                       save_positions=(false, false))
+    # TrixiParticles.update_smoothing_lengths!(system,
+    #                                          v_ode,
+    #                                          u_ode,
+    #                                          semi)
 
-end 
+    TrixiParticles.shift_particles!(system,
+                                    v_ode, u_ode,
+                                    semi,
+                                    integrator.dt)
+    # TrixiParticles.update_nhs!(semi, u_ode)
+
+    if length(u_ode) > length_u_before
+        resize!(integrator,
+                (length(v_ode), length(u_ode)))
+        TrixiParticles.@autoinfiltrate
+    end
+
+    derivative_discontinuity!(integrator, true)
+end
+
+refinement_callback = refine ?
+                      DiscreteCallback((u, t,
+                                        integrator) -> integrator.stats.naccept == 5,
+                                       apply_refinement!, save_positions=(false, false)) :
+                      nothing
 
 save_interval = 0.05
 next_save_time = [0.0]
 frame_counter = [0] # Integer frame counter
+vtk_callback = DiscreteCallback((u, t, integrator) -> t >= next_save_time[1],
+                                (integrator) -> begin
+                                    (; t) = integrator
+                                    v_ode = integrator.u.x[1]
+                                    u_ode = integrator.u.x[2]
+                                    semi = integrator.p.semi
+                                    system = semi.systems[1]
 
-vtk_callback = DiscreteCallback(
-    (u, t, integrator) -> t >= next_save_time[1],
-    (integrator) -> begin
-        (; t) = integrator
-        v_ode = integrator.u.x[1]
-        u_ode = integrator.u.x[2]
-        semi = integrator.p.semi
-        system = semi.systems[1]
+                                    interpolation_min = [0.0, 0.0]
+                                    interpolation_max = [box_length, box_length]
+                                    interpolation_spacing = min_spacing / 4
 
-        interpolation_min = [0.0, 0.0]
-        interpolation_max = [box_length, box_length]
-        interpolation_spacing = min_spacing / 4
+                                    # Put the text before the number for automatic Paraview grouping and pad the counter to 4 digits
+                                    refine_str = refine ? "ref" : "noref"
+                                    frame_str = lpad(frame_counter[1], 4, '0')
+                                    file_name = "taylor_greene_$(refine_str)_$(frame_str)"
 
-        # Put the text before the number for automatic Paraview grouping and pad the counter to 4 digits
-        refine_str = refine ? "ref" : "noref"
-        frame_str = lpad(frame_counter[1], 4, '0') 
-        file_name = "taylor_greene_$(refine_str)_$(frame_str)"
+                                    TrixiParticles.interpolate_plane_2d_vtk(interpolation_min,
+                                                                            interpolation_max,
+                                                                            interpolation_spacing,
+                                                                            semi, system,
+                                                                            v_ode, u_ode;
+                                                                            filename=file_name)
 
-        TrixiParticles.interpolate_plane_2d_vtk(
-            interpolation_min, interpolation_max, interpolation_spacing,
-            semi, system, v_ode, u_ode; 
-            filename=file_name
-        )
+                                    # Increment both the timer and the frame counter
+                                    next_save_time[1] += save_interval
+                                    frame_counter[1] += 1
+                                end,
+                                save_positions=(false, false))
 
-        # Increment both the timer and the frame counter
-        next_save_time[1] += save_interval
-        frame_counter[1] += 1
-    end,
-    save_positions=(false, false)
-)
-
-callbacks = CallbackSet(info_callback, saving_callback, pp_callback, UpdateCallback(), refinement_callback, vtk_callback)
+callbacks = CallbackSet(info_callback, saving_callback, pp_callback, UpdateCallback(),
+                        refinement_callback)
 
 dt_max = min(smoothing_length / 4 * (sound_speed + U), smoothing_length^2 / (8 * nu))
 
-# Use a Runge-Kutta method with automatic (error based) time step size control
 sol = solve(ode, RDPK3SpFSAL49(),
             abstol=1e-8, # Default abstol is 1e-6 (may need to be tuned to prevent boundary penetration)
             reltol=1e-4, # Default reltol is 1e-3 (may need to be tuned to prevent boundary penetration)
             dtmax=dt_max, save_everystep=false, callback=callbacks);
-

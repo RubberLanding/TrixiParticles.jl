@@ -15,7 +15,7 @@ using OrdinaryDiffEqCore
 
 # ==========================================================================================
 # ==== Resolution
-particle_spacing_factor = 0.5 # Resolution in the paper is `0.01` (5M particles)
+particle_spacing_factor = 1.0 # Resolution in the paper is `0.01` (5M particles)
 
 cylinder_diameter = 0.1
 particle_spacing = particle_spacing_factor * cylinder_diameter
@@ -123,7 +123,7 @@ n_buffer_refinement = ceil(Int32,
                         (y_max - y_min) / particle_spacing^2)
 n_buffer_particles = n_buffer_inlet + n_buffer_refinement
 
-refine = true
+refine = true 
 
 fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
                                            sound_speed,
@@ -304,12 +304,6 @@ function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
     end
 end
 
-function check_state_health(v_ode, system, step_name)
-    p_max = maximum(abs, TrixiParticles.current_pressure(v_ode, system))
-    v_max = maximum(abs, TrixiParticles.current_velocity(v_ode, system))
-    println("After $step_name -> Max Pressure: $p_max | Max Velocity: $v_max")
-end
-
 if refine
     refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept == 10,
                                            (integrator) -> begin
@@ -358,7 +352,7 @@ if refine
                                                # Merge the particles
                                                TrixiParticles.merge_particles!(system, v_ode, u_ode, semi)
 
-                                            #    TrixiParticles.@autoinfiltrate
+                                               TrixiParticles.@autoinfiltrate
 
                                                # Move active particles to the start and inactive particles to the end
                                                TrixiParticles.compact_system!(system, v_ode, u_ode, semi)

@@ -68,8 +68,7 @@ function Base.resize!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
     return v_ode
 end
 
-# TODO 
-@inline Base.resize!(system, n) = system
+@inline Base.resize!(system::AbstractSystem, n) = system
 
 function Base.resize!(system::AbstractFluidSystem, n)
     return resize!(system, system.particle_refinement, n)
@@ -78,6 +77,7 @@ end
 @inline Base.resize!(system, ::Nothing, n) = system
 
 function Base.resize!(system::AbstractFluidSystem, refinement, n)
+    # TrixiParticles.@autoinfiltrate
     # Resize standard system properties
     resize_system!(system, n)
 
@@ -86,7 +86,6 @@ function Base.resize!(system::AbstractFluidSystem, refinement, n)
 
     # Resize the cache and refinement arrays
     resize_cache!(system, n)
-    resize_refinement!(refinement, n)
 
     # Resize the system buffer
     resize_system_buffer!(system.buffer, n)
@@ -150,7 +149,8 @@ end
 function resize_refinement_cache!(system::AbstractFluidSystem, n)
     (; reference_mass, _particle_spacing, candidate_flags,
      candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density,
-     grad_pressure, grad_velocity) = system.cache
+     grad_pressure, grad_velocity, 
+     delete_candidates, split_candidates, merge_candidates) = system.cache
 
     NDIMS = ndims(system)
 
@@ -160,23 +160,17 @@ function resize_refinement_cache!(system::AbstractFluidSystem, n)
     resize!(candidate_offsets, n)
     resize!(neighbor_mass, n)
     resize!(neighbor_count, n)
+
+    resize!(delete_candidates, n)
+    resize!(split_candidates, n)
+    resize!(merge_candidates, n)
+
     resize!(delta_v, n * NDIMS)
     resize!(grad_density, n * NDIMS)
     resize!(grad_pressure, n * NDIMS)
     resize!(grad_velocity, n * NDIMS * NDIMS)
 
     return system
-end
-
-# TODO
-function resize_refinement!(refinement::ParticleRefinement, n)
-    (; delete_candidates, split_candidates, merge_candidates) = refinement
-
-    resize!(delete_candidates, n)
-    resize!(split_candidates, n)
-    resize!(merge_candidates, n)
-
-    return refinement
 end
 
 @inline function resize_system_buffer!(buffer::SystemBuffer, n)
@@ -189,7 +183,7 @@ end
     active_particle[(old_capacity + 1):end] .= false
 
     resize!(eachparticle, n)
-    
+
     return buffer
 end
 
@@ -246,4 +240,98 @@ function reinitialize_neighborhood_search!(semi, system::TotalLagrangianSPHSyste
                                            neighbor::TotalLagrangianSPHSystem, u_ode)
     # For TLSPH, the self-interaction NHS is already initialized in the system constructor
     return semi
+end
+
+# Quick fix for setting `eachpoint` for the TrivialNHS with Taylor Greene
+function update_nhs(semi, system, neighbor)
+    (; neighborhood_searches) = semi
+
+    system_index = TrixiParticles.system_indices(system, semi)
+    neighbor_index = TrixiParticles.system_indices(neighbor, semi)
+
+    nhs = neighborhood_searches[system_index, neighbor_index]
+    n_active_particles = system.buffer.active_particle_count[]
+    neighborhood_searches[system_index,
+                          neighbor_index] = TrixiParticles.copy_neighborhood_search(nhs,
+                                                                                    nhs.search_radius,
+                                                                                    n_active_particles)
+end
+
+function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
+    # Collect all history and intermediate caches
+    caches_to_clean = [integrator.uprev, OrdinaryDiffEqCore.full_cache(integrator)...,
+        integrator.fsalfirst, integrator.fsallast]
+
+    # 1. SHIFT UPREV AND WIPE INTERMEDIATE CACHES
+    for c in caches_to_clean
+        # Skip invalid caches or caches of a different type
+        if isnothing(c) || typeof(c) != typeof(integrator.u)
+            continue
+        end
+
+        is_u = (c.x[1] === integrator.u.x[1])
+        is_uprev = (c.x[1] === integrator.uprev.x[1])
+
+        if is_uprev
+            # `uprev` was resized but not shifted. We shift it right-to-left 
+            # to safely push data into newly allocated space without overwriting.
+            for sys_idx in reverse(eachindex(semi.systems))
+                r_v_old = old_ranges_v[sys_idx]
+                r_v_new = semi.ranges_v[sys_idx]
+
+                r_u_old = old_ranges_u[sys_idx]
+                r_u_new = semi.ranges_u[sys_idx]
+
+                len_v = min(length(r_v_old), length(r_v_new))
+                len_u = min(length(r_u_old), length(r_u_new))
+
+                # Base.copyto! safely handles overlapping memory
+                if len_v > 0
+                    copyto!(c.x[1], first(r_v_new), c.x[1], first(r_v_old), len_v)
+                end
+                if len_u > 0
+                    copyto!(c.x[2], first(r_u_new), c.x[2], first(r_u_old), len_u)
+                end
+            end
+        elseif !is_u
+            # INTERMEDIATE CACHES (k): Wipe completely to prevent boundary teleportation
+            fill!(c.x[1], 0.0)
+            fill!(c.x[2], 0.0)
+        end
+    end
+
+    # 2. SANITIZE THE INACTIVE GAPS IN STATE ARRAYS
+    for (sys_idx, sys) in enumerate(semi.systems)
+        r_v_new = semi.ranges_v[sys_idx]
+        r_u_new = semi.ranges_u[sys_idx]
+
+        n_vars_v = size(TrixiParticles.wrap_v(integrator.u.x[1], sys, semi), 1)
+        n_vars_u = size(TrixiParticles.wrap_u(integrator.u.x[2], sys, semi), 1)
+
+        active_v_len = length(r_v_new)
+        active_u_len = length(r_u_new)
+
+        # Calculate true active lengths using the buffer[cite: 7]
+        if hasproperty(sys, :buffer) && hasproperty(sys.buffer, :active_particle_count)
+            active_v_len = sys.buffer.active_particle_count[] * n_vars_v
+            active_u_len = sys.buffer.active_particle_count[] * n_vars_u
+        end
+
+        inactive_v_range = (first(r_v_new) + active_v_len):last(r_v_new)
+        inactive_u_range = (first(r_u_new) + active_u_len):last(r_u_new)
+
+        # Zero out the inactive gaps in both `u` and `uprev`
+        for c in caches_to_clean
+            if !isnothing(c) && typeof(c) == typeof(integrator.u)
+                if c.x[1] === integrator.u.x[1] || c.x[1] === integrator.uprev.x[1]
+                    if length(inactive_v_range) > 0
+                        c.x[1][inactive_v_range] .= 0.0
+                    end
+                    if length(inactive_u_range) > 0
+                        c.x[2][inactive_u_range] .= 0.0
+                    end
+                end
+            end
+        end
+    end
 end

@@ -1,24 +1,24 @@
-@inline shift_particles!(system, v_ode, u_ode, semi, dt) = system
+@inline shift_particles!(system, v_ode, u_ode, semi, dt, theta) = system
 
-@inline function shift_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi, dt)
-    return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, dt)
+@inline function shift_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi, dt, theta=1.0)
+    return shift_particles!(system, system.particle_refinement, v_ode, u_ode, semi, dt, theta)
 end
 
-@inline shift_particles!(system, ::Nothing, v_ode, u_ode, semi, dt) = system
+@inline shift_particles!(system, ::Nothing, v_ode, u_ode, semi, dt, theta) = system
 
-@inline function shift_particles!(system, refinement, v_ode, u_ode, semi, dt)
+@inline function shift_particles!(system, refinement, v_ode, u_ode, semi, dt, theta)
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
 
     update_shifting_inner!(system, refinement, v, u, v_ode, u_ode, semi)
 
-    apply_particle_shifting!(u_ode, v_ode, refinement, system, semi, dt)
+    apply_particle_shifting!(u_ode, v_ode, refinement, system, semi, dt, theta)
 
     return system
 end
 
 function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
-                                  system, semi, dt)
+                                  system, semi, dt, theta=1.0)
     (; cache) = system
     # NOTE: You must add `grad_pressure` to your cache allocation in refinement.jl!
     (; delta_v, grad_density, grad_velocity, grad_pressure) = cache
@@ -28,14 +28,17 @@ function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
     u = wrap_u(u_ode, system, semi)
     v = wrap_v(v_ode, system, semi)
 
+    u_before = copy(u)
+    shift_ = zeros(size(u))
+
     # Add δr from the cache to the current coordinates
     @threaded semi for particle in eachparticle(system)
-        
+
         # Calculate the norm of the shift vector (delta_r = dt * delta_v)
         shift_norm = zero(eltype(u))
         for i in 1:NDIMS
             idx = (particle - 1) * NDIMS + i
-            shift_norm += (dt * delta_v[idx])^2
+            shift_norm += (delta_v[idx])^2
         end
         shift_norm = sqrt(shift_norm)
 
@@ -47,7 +50,9 @@ function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
             idx = (particle - 1) * NDIMS + i
 
             # Actual applied displacement
-            dr_i = theta * dt * delta_v[idx]
+            dr_i = theta * delta_v[idx]
+
+            shift_[i, particle] += dr_i
 
             # Eq 36: Position Update
             @inbounds u[i, particle] += dr_i
@@ -58,16 +63,24 @@ function apply_particle_shifting!(u_ode, v_ode, refinement::ParticleRefinement,
             # Eq 37: Taylor series correction for Velocity
             for j in 1:NDIMS
                 idx_3d = (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
-                @inbounds v[j, particle] += grad_velocity[idx_3d] * dr_i 
+                @inbounds v[j, particle] += grad_velocity[idx_3d] * dr_i
             end
-            
+
             # Eq 37: Taylor series correction for Pressure (for EDAC specifically)
             @inbounds v[NDIMS + 1, particle] += grad_pressure[idx] * dr_i
         end
     end
 
+    # shift_ = [norm(x) for x in eachcol(shift_)]
+
+    TrixiParticles.@autoinfiltrate
+
     return u
 end
+
+# Fallback for kernels that might not have a mathematically useful inflection point implemented yet
+kernel_inflection_point(::AbstractSmoothingKernel) = error("Inflection point not defined for this kernel.")
+@inline kernel_inflection_point(::SchoenbergQuinticSplineKernel) = 0.759298480738450
 
 @fastpow function update_shifting_inner!(system, refinement::ParticleRefinement,
                                          v, u, v_ode, u_ode, semi)
@@ -80,8 +93,6 @@ end
     set_zero!(grad_density)
     set_zero!(grad_velocity)
     set_zero!(grad_pressure)
-
-    v_max_ = v_max(refinement.shifting_technique, v, system)
 
     foreach_system(semi) do neighbor_system
         u_neighbor = wrap_u(u_ode, neighbor_system, semi)
@@ -99,22 +110,41 @@ end
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
             rho_a = @inbounds current_density(v, system, particle)
             rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
-            
+
             # Extract pressure to calculate the gradient
             p_a = @inbounds current_pressure(v, system, particle)
             p_b = @inbounds current_pressure(v_neighbor, neighbor_system, neighbor)
 
             h_a = smoothing_length(system, particle)
             h_b = smoothing_length(neighbor_system, neighbor)
-            h = 0.5 * (h_a + h_b)
+            h_ab = 0.5 * (h_a + h_b)
 
             dx = particle_spacing(system, particle)
+
+            # Eq 15 specific definitions
+            xi = kernel_inflection_point(smoothing_kernel)
             
-            Wdx = kernel(smoothing_kernel, dx, h)
+            # Kernel evaluations for the repulsive fraction
+            W_rij = kernel(smoothing_kernel, distance, h_ab)
+            W_dx_xi = kernel(smoothing_kernel, dx, xi * h_ab)
 
-            kernel_weight = kernel(smoothing_kernel, distance, h)
-            grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h)
+            # Average kernel gradient
+            grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h_ab)
 
+            rho0 = system.particle_refinement.reference_density
+
+            # Repulsion factor from Eq 15
+            repulsion_factor = 1.0 + 0.24 * (W_rij / W_dx_xi)^4
+
+            # Eq 15: Spatial displacement calculation (stored in delta_v buffer)
+            delta_r_ = -0.5 * h_a^2 * (m_b / rho0) * repulsion_factor * grad_kernel
+
+            # Write into the buffers (reusing delta_v to hold delta_r)
+            for i in eachindex(delta_r_)
+                idx = (particle - 1) * NDIMS + i
+                @inbounds delta_v[idx] += delta_r_[i]
+            end
+            
             # Compute density gradient 
             grad_density_ = (m_b / rho_b) * (rho_b - rho_a) * grad_kernel
 
@@ -122,26 +152,15 @@ end
             v_a = current_velocity(v, system, particle)
             v_b = current_velocity(v_neighbor, neighbor_system, neighbor)
             grad_velocity_ = (m_b / rho_b) * (v_b - v_a) * (grad_kernel)'
-            
+
             # Compute pressure gradient
             grad_pressure_ = (m_b / rho_b) * (p_b - p_a) * grad_kernel
-
-            # Eq. 7 in Sun et al. (2017) adapted with Haftu multiplier
-            delta_v_ = -v_max_ * (2 * h)^2 / (2 * dx) *
-                       (1 + (kernel_weight / Wdx)^4 * 2 / 10) *
-                       m_b / (rho_a + rho_b) * grad_kernel
-
-            # Write into the buffers
-            for i in eachindex(delta_v_)
-                idx = (particle - 1) * NDIMS + i
-                @inbounds delta_v[idx] += delta_v_[i]
-            end
 
             for i in eachindex(grad_density_)
                 idx = (particle - 1) * NDIMS + i
                 @inbounds grad_density[idx] += grad_density_[i]
             end
-            
+
             for i in eachindex(grad_pressure_)
                 idx = (particle - 1) * NDIMS + i
                 @inbounds grad_pressure[idx] += grad_pressure_[i]

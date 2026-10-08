@@ -108,15 +108,6 @@ function interact!(dv, v_particle_system, u_particle_system,
                                   particle, neighbor, pos_diff, distance)
         # TrixiParticles.@autoinfiltrate
 
-        if norm(dv_particle[]) > 100000.0 # Catch a massive acceleration spike
-            println("🚨 EXPLOSIVE ACCELERATION DETECTED!")
-            println("  Particle ID: ", particle, " | Neighbor ID: ", neighbor)
-            println("  Distance: ", distance, " | h_a: ", h_a, " | h_b: ", h_b)
-            println("  dv_pressure: ", dv_pressure)
-            println("  rho_a: ", rho_a, " | rho_b: ", rho_b)
-            TrixiParticles.@autoinfiltrate
-        end
-
         for i in 1:ndims(particle_system)
             @inbounds dv[i, particle] += dv_particle[][i]
         end

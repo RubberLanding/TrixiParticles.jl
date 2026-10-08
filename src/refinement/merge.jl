@@ -17,8 +17,8 @@ end
 
 @inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
                                   semi; merge_iter=3)
-    (; buffer) = system
-    (; delete_candidates) = refinement
+    (; buffer, cache) = system
+    (; delete_candidates) = cache
 
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
@@ -40,6 +40,8 @@ end
         update_system_buffer!(buffer)
         neighborhood_search = get_neighborhood_search(system, semi)
         update_nhs!(neighborhood_search, system, system, u, u, semi)
+        # update_nhs(semi, system, system) # Quick fix
+
         # TrixiParticles.@autoinfiltrate
     end
 
@@ -49,8 +51,8 @@ end
 end
 
 function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi)
-    (; spacing_ratio, merge_candidates, delete_candidates) = refinement
-    (; reference_mass) = system.cache
+    (; spacing_ratio) = refinement
+    (; reference_mass, merge_candidates, delete_candidates) = system.cache
 
     set_zero!(merge_candidates)
     system_coords = current_coordinates(u, system)
@@ -60,6 +62,8 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
                            semi) do particle, neighbor, pos_diff, distance
         # Do not merge a particle that was deleted
         delete_candidates[particle] && return
+
+        # neighbor == 26 && TrixiParticles.@autoinfiltrate
         delete_candidates[neighbor] && return
 
         particle == neighbor && return
@@ -91,8 +95,7 @@ end
 
 function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     (; smoothing_kernel, cache) = system
-    (; merge_candidates, delete_candidates) = refinement
-    (; reference_mass) = cache
+    (; reference_mass, merge_candidates, delete_candidates) = cache
 
     ELTYPE = eltype(u)
     NDIMS = ndims(system)
@@ -101,7 +104,7 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     kernel_0_1 = kernel(smoothing_kernel, zero(ELTYPE), one(ELTYPE))
 
     # Merge and delete particles
-    @threaded semi for particle in eachindex(merge_candidates)
+    @threaded semi for particle in eachparticle(system)
         candidate = merge_candidates[particle]
 
         delete_candidates[particle] && return

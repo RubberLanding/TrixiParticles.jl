@@ -325,6 +325,7 @@ function update_nhs!(neighborhood_search,
                                      RigidBodySystem},
                      u_system, u_neighbor, semi)
     # The current coordinates of fluids and structures change over time
+    # TrixiParticles.@autoinfiltrate
     update!(neighborhood_search,
             current_coordinates(u_system, system),
             current_coordinates(u_neighbor, neighbor),

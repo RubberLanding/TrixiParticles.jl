@@ -16,7 +16,7 @@ end
 # Update the reference spacing of all fluid particles
 @inline function update_particle_spacing(fluid_system::AbstractFluidSystem, refinement,
                                          v_ode, u_ode, semi)
-    (; spacing_ratio, smoothing_length_factor) = refinement
+    (; spacing_ratio, smoothing_length_factor, reference_density) = refinement
     (; _particle_spacing, reference_mass) = fluid_system.cache
 
     NDIMS = ndims(fluid_system)
@@ -37,7 +37,7 @@ end
             new_spacing = spacing_avg
         end
 
-        reference_mass[particle] = current_density(v, fluid_system, particle) *
+        reference_mass[particle] = reference_density *
                                    new_spacing^NDIMS
     end
 
@@ -59,13 +59,29 @@ end
         u_neighbor_system = wrap_u(u_ode, neighbor_system, semi)
         neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
 
-        PointNeighbors.foreach_neighbor(system_coords, neighbor_coords, neighborhood_search,
-                                        particle) do particle, neighbor, pos_diff, distance
-            neighbor_spacing = _particle_spacing[neighbor]
-            spacing_min = min(spacing_min, neighbor_spacing)
-            spacing_max = max(spacing_max, neighbor_spacing)
-            spacing_avg += neighbor_spacing
-            counter_neighbors += 1
+        if neighbor_system isa AbstractFluidSystem &&
+           !isnothing(neighbor_system.particle_refinement)
+            PointNeighbors.foreach_neighbor(system_coords, neighbor_coords,
+                                            neighborhood_search,
+                                            particle) do particle, neighbor, pos_diff,
+                                                         distance
+                neighbor_spacing = _particle_spacing[neighbor]
+                spacing_min = min(spacing_min, neighbor_spacing)
+                spacing_max = max(spacing_max, neighbor_spacing)
+                spacing_avg += neighbor_spacing
+                counter_neighbors += 1
+            end
+        else
+            PointNeighbors.foreach_neighbor(system_coords, neighbor_coords,
+                                            neighborhood_search,
+                                            particle) do particle, neighbor, pos_diff,
+                                                         distance
+                neighbor_spacing = particle_spacing(neighbor_system, neighbor)
+                spacing_min = min(spacing_min, neighbor_spacing)
+                spacing_max = max(spacing_max, neighbor_spacing)
+                spacing_avg += neighbor_spacing
+                counter_neighbors += 1
+            end
         end
     end
 

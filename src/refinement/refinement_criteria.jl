@@ -3,7 +3,7 @@ abstract type RefinementCriteria end
 struct SpatialRefinementCriterion <: RefinementCriteria end
 
 struct SolutionRefinementCriterion{F} <: RefinementCriteria
-    condition_func :: F
+    condition_func::F
 end
 
 struct DummyRefinementCriterion <: RefinementCriteria end
@@ -43,7 +43,8 @@ end
     return fluid_system
 end
 
-@inline function apply_criterion!(criterion::SpatialRefinementCriterion, fluid_system, v_ode, u_ode, semi)
+@inline function apply_criterion!(criterion::SpatialRefinementCriterion, fluid_system,
+                                  v_ode, u_ode, semi)
     # Set spatial min spacing (Alg. 4)
     foreach_system(semi) do neighbor_system
         spatial_min_spacing!(fluid_system, neighbor_system, v_ode, u_ode, semi)
@@ -55,7 +56,10 @@ end
 @inline spatial_min_spacing!(fluid_system::AbstractFluidSystem, neighbor_system, v_ode,
                              u_ode, semi) = fluid_system
 
-@inline function spatial_min_spacing!(fluid_system::AbstractFluidSystem, neighbor_system::Union{AbstractBoundarySystem, AbstractStructureSystem}, v_ode, u_ode, semi)
+@inline function spatial_min_spacing!(fluid_system::AbstractFluidSystem,
+                                      neighbor_system::Union{AbstractBoundarySystem,
+                                                             AbstractStructureSystem},
+                                      v_ode, u_ode, semi)
     (; _particle_spacing) = fluid_system.cache
     (; min_spacing) = fluid_system.particle_refinement
 
@@ -64,13 +68,14 @@ end
     neighbor_u = wrap_u(u_ode, neighbor_system, semi)
     neighbor_coords = current_coordinates(neighbor_u, neighbor_system)
 
-    foreach_point_neighbor(neighbor_system, fluid_system, neighbor_coords, fluid_coords, semi) do neighbor_particle, fluid_particle, pos_diff, distance
+    foreach_point_neighbor(neighbor_system, fluid_system, neighbor_coords, fluid_coords,
+                           semi) do neighbor_particle, fluid_particle, pos_diff, distance
         distance < sqrt(eps()) && return
         _particle_spacing[fluid_particle] = min_spacing
     end
 
     return fluid_system
-end 
+end
 
 # For testing "taylor_greene_vortex_2d_refinement.jl"
 # Mark a 0.4 x 0.4 box perfectly in the center for refinement. 
@@ -82,7 +87,7 @@ end
 # function BoxDebugRefinement()
 # end
 
-@inline function apply_criterion!(criterion::SolutionRefinementCriterion, system, 
+@inline function apply_criterion!(criterion::SolutionRefinementCriterion, system,
                                   v_ode, u_ode, semi)
     (; _particle_spacing) = system.cache
     (; min_spacing) = system.particle_refinement
