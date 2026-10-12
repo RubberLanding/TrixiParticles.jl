@@ -99,7 +99,7 @@ n_childs = TrixiParticles.nchilds(refinement.splitting_pattern)
 # n_buffer_particles = ceil(Int32,
 #                         12 * n_childs * (x_max - x_min) *
 #                         (y_max - y_min) / particle_spacing^2)
-n_buffer_particles = 1
+n_buffer_particles = 1000
 
 viscosity = ViscosityAdami(; nu)
 density_calculator = SummationDensity()
@@ -173,24 +173,26 @@ function apply_refinement!(integrator)
     TrixiParticles.split_particles!(semi, v_ode,
                                     u_ode, v_tmp,
                                     u_tmp)
+    TrixiParticles.compact_system!(system, v_ode,
+                                   u_ode, semi)
+    TrixiParticles.update_nhs!(semi, u_ode)
 
-    # TrixiParticles.merge_particles!(system,
-    #                                 v_ode, u_ode,
-    #                                 semi)
-    # TrixiParticles.compact_system!(system, v_ode,
-    #                                u_ode, semi)
-    # TrixiParticles.update_nhs!(semi, u_ode)
-
-    # TrixiParticles.update_smoothing_lengths!(system,
-    #                                          v_ode,
-    #                                          u_ode,
-    #                                          semi)
+    TrixiParticles.merge_particles!(system,
+                                    v_ode, u_ode,
+                                    semi)
+    TrixiParticles.compact_system!(system, v_ode,
+                                   u_ode, semi)
+    TrixiParticles.update_nhs!(semi, u_ode)
 
     TrixiParticles.shift_particles!(system,
                                     v_ode, u_ode,
                                     semi,
-                                    integrator.dt)
-    # TrixiParticles.update_nhs!(semi, u_ode)
+                                    integrator.dt, 1.0, 5)
+
+    TrixiParticles.update_smoothing_lengths!(system,
+                                             v_ode,
+                                             u_ode,
+                                             semi)
 
     if length(u_ode) > length_u_before
         resize!(integrator,

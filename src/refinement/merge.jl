@@ -45,8 +45,6 @@ end
         # TrixiParticles.@autoinfiltrate
     end
 
-    # TrixiParticles.@autoinfiltrate
-
     return system
 end
 
@@ -142,9 +140,6 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
 
             # Update mass
             set_particle_mass!(system, particle, m_merge)
-
-            # Update reference mass
-            reference_mass[particle] += reference_mass[candidate]
 
             # Let this thread mark the other particle as deleted 
             # and deactivate it to avoid race condition 
