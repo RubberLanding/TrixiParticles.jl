@@ -140,13 +140,14 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
     avg_pressure_reduction = Val(average_pressure_reduction)
 
     nu_edac = (alpha * smoothing_length * sound_speed) / 8
- 
+
     if !isnothing(particle_refinement)
         smoothing_length = fill(smoothing_length, n_particles)
     end
 
     cache = (; create_cache_density(initial_condition, density_calculator)...,
-             create_cache_shifting(initial_condition, shifting_technique, particle_refinement)...,
+             create_cache_shifting(initial_condition, shifting_technique,
+                                   particle_refinement)...,
              create_cache_avg_pressure_reduction(initial_condition,
                                                  avg_pressure_reduction)...,
              create_cache_surface_normal(surface_normal_method, ELTYPE, NDIMS,
@@ -173,14 +174,25 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
                                 typeof(avg_pressure_reduction), typeof(source_terms),
                                 typeof(surface_tension), typeof(surface_normal_method),
                                 typeof(buffer), typeof(particle_refinement),
-                                typeof(cache), typeof(smoothing_length)}(initial_condition, mass, density_calculator,
-                                               smoothing_kernel, sound_speed, viscosity,
-                                               nu_edac, acceleration_, correction,
-                                               pressure_acceleration, shifting_technique,
-                                               avg_pressure_reduction,
-                                               source_terms, surface_tension,
-                                               surface_normal_method, buffer,
-                                               particle_refinement, cache, smoothing_length)
+                                typeof(cache), typeof(smoothing_length)}(initial_condition,
+                                                                         mass,
+                                                                         density_calculator,
+                                                                         smoothing_kernel,
+                                                                         sound_speed,
+                                                                         viscosity,
+                                                                         nu_edac,
+                                                                         acceleration_,
+                                                                         correction,
+                                                                         pressure_acceleration,
+                                                                         shifting_technique,
+                                                                         avg_pressure_reduction,
+                                                                         source_terms,
+                                                                         surface_tension,
+                                                                         surface_normal_method,
+                                                                         buffer,
+                                                                         particle_refinement,
+                                                                         cache,
+                                                                         smoothing_length)
 end
 
 create_cache_avg_pressure_reduction(initial_condition, ::Val{false}) = (;)
@@ -365,7 +377,8 @@ function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
                                                            neighbor_system, neighbor)
             neighbor_counter[particle] += 1
 
-            compute_beta!(system, neighbor_system, particle, neighbor, distance, particle_refinement)
+            compute_beta!(system, neighbor_system, particle, neighbor, distance,
+                          particle_refinement)
         end
     end
 
@@ -378,16 +391,19 @@ function update_average_pressure!(system, ::Val{true}, v_ode, u_ode, semi)
     return system
 end
 
-@inline compute_beta!(system, neighbor_system, particle, neighbor, distance, ::Nothing) = nothing
+@inline compute_beta!(system, neighbor_system, particle, neighbor, distance,
+                      ::Nothing) = nothing
 
-@inline function compute_beta!(system, neighbor_system, particle, neighbor, distance, refinement)
+@inline function compute_beta!(system, neighbor_system, particle, neighbor, distance,
+                               refinement)
     (; cache, smoothing_kernel) = system
     (; beta) = cache
 
     # Accumulate the sum of m_j * r_ij * (dW/dr_ij) for the particle (Eq. 7)
     mass_neighbor = hydrodynamic_mass(neighbor_system, neighbor)
     smoothing_length_particle = smoothing_length(system, particle)
-    beta[particle] += mass_neighbor * distance * kernel_deriv(smoothing_kernel, distance, smoothing_length_particle)
+    beta[particle] += mass_neighbor * distance *
+                      kernel_deriv(smoothing_kernel, distance, smoothing_length_particle)
 
     return nothing
 end
@@ -404,7 +420,7 @@ end
         rho_i = current_density(v, system, particle)
         beta[particle] *= -1.0 / (rho_i * d)
     end
-    
+
     return nothing
 end
 

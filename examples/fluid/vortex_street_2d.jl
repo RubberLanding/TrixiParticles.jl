@@ -92,7 +92,6 @@ viscosity = ViscosityAdami(nu=kinematic_viscosity)
 background_pressure = sound_speed^2 * fluid_density
 shifting_technique = TransportVelocityAdami(; background_pressure)
 
-
 fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
                                            sound_speed,
                                            density_calculator=fluid_density_calculator,

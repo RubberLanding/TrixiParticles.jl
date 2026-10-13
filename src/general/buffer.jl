@@ -66,19 +66,19 @@ end
 
 @inline function each_active_particle(system::AbstractFluidSystem, buffer)
     return each_active_particle(system, system.particle_refinement, buffer)
-end 
+end
 
 @inline function each_active_particle(system::AbstractFluidSystem, ::Nothing, buffer)
     return view(buffer.eachparticle, 1:buffer.active_particle_count[])
-end 
+end
 
 # When using refinement together with a buffer, we assume that the system is 
 # always sorted via `compact_system!`, before calling `each_active_particle`. 
 # We do that because `eachpoint` of `TrivialNeighborhoodSearch` is a UnitRange
 # by default, when initialized. By returning a view, we get a TypeError. 
 @inline function each_active_particle(system::AbstractFluidSystem, refinement, buffer)
-        return 1:buffer.active_particle_count[]
-    end
+    return 1:buffer.active_particle_count[]
+end
 
 @inline function deactivate_particle!(system, particle, v, u)
     (; active_particle) = system.buffer

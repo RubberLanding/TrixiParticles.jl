@@ -11,7 +11,8 @@ end
                                            v_particle_system, v_neighbor_system,
                                            particle, neighbor, pos_diff, distance,
                                            sound_speed, m_a, m_b, rho_a, rho_b,
-                                           v_a, v_b, grad_kernel, grad_kernel_avg, beta_a_inv,
+                                           v_a, v_b, grad_kernel, grad_kernel_avg,
+                                           beta_a_inv,
                                            viscosity_correction=1)
     viscosity = viscosity_model(particle_system, neighbor_system)
 
@@ -20,7 +21,7 @@ end
                          v_particle_system, v_neighbor_system,
                          particle, neighbor, pos_diff, distance,
                          sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel,
-                         grad_kernel_avg, beta_a_inv, 
+                         grad_kernel_avg, beta_a_inv,
                          viscosity_correction)
 end
 

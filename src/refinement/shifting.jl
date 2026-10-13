@@ -132,7 +132,7 @@ end
     return system
 end
 
-# Implements the Haftu geometric shift (Eq. 15) but fixes the kernel evaluation.
+# Implements Haftu's approach but fixes the kernel evaluation.
 # Unlike the adapted version above, it uses the kernel inflection point (xi) 
 # and global reference density. Unlike the original Haftu version below, it mathematically fixes 
 # the kernel evaluation by using xi * h_ab as the target distance.

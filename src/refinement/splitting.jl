@@ -6,10 +6,6 @@ function split_particles!(semi, v_ode, u_ode, _v_ode, _u_ode)
         isnothing(system.particle_refinement) && return
         (; buffer, particle_refinement, cache) = system
         (; active_particle, active_particle_count) = buffer
-        (; split_candidates) = cache
-
-        v = wrap_v(v_ode, system, semi)
-        u = wrap_u(u_ode, system, semi)
 
         n_new_particles = collect_split_candidates!(system, particle_refinement, v_ode,
                                                     u_ode, semi)
@@ -25,7 +21,6 @@ function split_particles!(semi, v_ode, u_ode, _v_ode, _u_ode)
                                required_capacity + buffer.buffer_size)
 
             resize!(system, new_capacity)
-
         end
     end
 
@@ -79,9 +74,8 @@ function split_particles!(semi, v_ode, u_ode, _v_ode, _u_ode)
         # Update the nhs for the fluid-fluid self-interaction, 
         # so the following merge finds the new particles
         update_system_buffer!(buffer)
-        neighborhood_search = get_neighborhood_search(system, semi)
-        update_nhs!(neighborhood_search, system, system, u, u, semi)
-        # update_nhs(semi, system, system) # Quick fix
+        nhs = get_neighborhood_search(system, semi)
+        update_nhs!(nhs, system, system, u, u, semi)
     end
 
     # TrixiParticles.@autoinfiltrate
@@ -95,13 +89,13 @@ end
     (; splitting_pattern) = refinement
     (; reference_mass, split_candidates, delete_candidates) = system.cache
 
+    split_candidates .= false
     @threaded semi for particle in eachparticle(system)
         is_alive = !delete_candidates[particle]
         particle_mass = hydrodynamic_mass(system, particle)
         particle_mass_max = 1.05 * reference_mass[particle]
 
         split_candidates[particle] = is_alive && (particle_mass > particle_mass_max)
-        # is_alive && (particle_mass > particle_mass_max) && TrixiParticles.@autoinfiltrate
     end
 
     # Explicitly check whether a split candidate will create 

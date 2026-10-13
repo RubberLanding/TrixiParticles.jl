@@ -149,7 +149,7 @@ end
 function resize_refinement_cache!(system::AbstractFluidSystem, n)
     (; reference_mass, _particle_spacing, candidate_flags,
      candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density,
-     grad_pressure, grad_velocity, 
+     grad_pressure, grad_velocity,
      delete_candidates, split_candidates, merge_candidates) = system.cache
 
     NDIMS = ndims(system)

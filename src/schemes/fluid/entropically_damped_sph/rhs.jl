@@ -3,7 +3,8 @@ function interact!(dv, v_particle_system, u_particle_system,
                    v_neighbor_system, u_neighbor_system,
                    particle_system::EntropicallyDampedSPHSystem,
                    neighbor_system, semi)
-    (; sound_speed, density_calculator, correction, nu_edac, particle_refinement, smoothing_kernel) = particle_system
+    (; sound_speed, density_calculator, correction, nu_edac, particle_refinement,
+     smoothing_kernel) = particle_system
 
     system_coords = current_coordinates(u_particle_system, particle_system)
     neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
@@ -45,8 +46,6 @@ function interact!(dv, v_particle_system, u_particle_system,
         v_a = @inbounds current_velocity(v_particle_system, particle_system, particle)
         v_b = @inbounds current_velocity(v_neighbor_system, neighbor_system, neighbor)
 
-
-
         p_a = @inbounds current_pressure(v_particle_system, particle_system, particle)
         p_b = @inbounds current_pressure(v_neighbor_system, neighbor_system, neighbor)
 
@@ -85,11 +84,12 @@ function interact!(dv, v_particle_system, u_particle_system,
         # TrixiParticles.@autoinfiltrate
 
         dv_particle = Ref(dv_pressure)
-        @inbounds TrixiParticles.dv_shifting!(dv_particle, 
+        @inbounds TrixiParticles.dv_shifting!(dv_particle,
                                               shifting_technique(particle_system),
                                               particle_system, neighbor_system,
                                               v_particle_system, v_neighbor_system,
-                                              particle, neighbor, m_a, m_b, rho_a, rho_b, v_a, v_b,
+                                              particle, neighbor, m_a, m_b, rho_a, rho_b,
+                                              v_a, v_b,
                                               pos_diff, distance,
                                               grad_kernel_a, correction)
         # TrixiParticles.@autoinfiltrate

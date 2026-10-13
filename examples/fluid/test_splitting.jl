@@ -31,7 +31,8 @@ using OrdinaryDiffEqLowStorageRK
     smoothing_length = 1.2 * particle_spacing
     smoothing_kernel = SchoenbergQuinticSplineKernel{2}()
 
-    fluid = RectangularShape(particle_spacing, (n_particles_xy, n_particles_xy), (0.0, 0.0), density=fluid_density)
+    fluid = RectangularShape(particle_spacing, (n_particles_xy, n_particles_xy), (0.0, 0.0),
+                             density=fluid_density)
 
     n_particles = TrixiParticles.nparticles(fluid)
     buffer = ResizeBuffer(fluid)
@@ -48,24 +49,25 @@ using OrdinaryDiffEqLowStorageRK
 
     idx = 55
     idxs = [34, 35, 36, 37,
-            44, 45, 46, 47,
-            54, 55, 56, 57,
-            64, 65, 66, 67,
-            ]
+        44, 45, 46, 47,
+        54, 55, 56, 57,
+        64, 65, 66, 67
+    ]
     fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
-                                            sound_speed, density_calculator,
-                                            shifting_technique,
-                                            viscosity, 
-                                            correction,
-                                            pressure_acceleration=nothing,
-                                            particle_refinement=refinement)
+                                               sound_speed, density_calculator,
+                                               shifting_technique,
+                                               viscosity,
+                                               correction,
+                                               pressure_acceleration=nothing,
+                                               particle_refinement=refinement)
     fluid_system.cache.density .= fluid_density
 
     # ==========================================================================================
     # ==== Test
     periodic_box = PeriodicBox(min_corner=[0.0, 0.0], max_corner=[box_length, box_length])
     semi = Semidiscretization(fluid_system,
-                            neighborhood_search=TrivialNeighborhoodSearch{2}(; periodic_box))
+                              neighborhood_search=TrivialNeighborhoodSearch{2}(;
+                                                                               periodic_box))
 
     ode = semidiscretize(semi, (0.0, 1.0))
 
@@ -75,7 +77,7 @@ using OrdinaryDiffEqLowStorageRK
 
     # fluid_coords = TrixiParticles.current_coordinates(u, fluid_system)
     # fluid_nhs = TrixiParticles.get_neighborhood_search(fluid_system, semi)
-    
+
     # neighbor_particles = []
     # PointNeighbors.foreach_neighbor(fluid_coords, fluid_coords, fluid_nhs, idx) do particle, neighbor, pos_diff, distance
     #     push!(neighbor_particles, neighbor)
@@ -105,31 +107,40 @@ using OrdinaryDiffEqLowStorageRK
     TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
     # TrixiParticles.@autoinfiltrate
-    TrixiParticles.reset_resize_buffer!(fluid_system.particle_refinement.resize_buffer, fluid_system)
+    TrixiParticles.reset_resize_buffer!(fluid_system.particle_refinement.resize_buffer,
+                                        fluid_system)
     TrixiParticles.merge_particles!(fluid_system, v_ode, u_ode, semi)
     # TrixiParticles.@autoinfiltrate
     TrixiParticles.update_nparticles_new!(fluid_system)
     TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
 
     u = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
-    ps_before_update = [TrixiParticles.particle_spacing(fluid_system, particle) for particle in TrixiParticles.eachparticle(fluid_system)]
-    ic_before_update = InitialCondition(coordinates=u, density=1000.0, mass=fluid_system.smoothing_length, pressure=ps_before_update)
+    ps_before_update = [TrixiParticles.particle_spacing(fluid_system, particle)
+                        for particle in TrixiParticles.eachparticle(fluid_system)]
+    ic_before_update = InitialCondition(coordinates=u, density=1000.0,
+                                        mass=fluid_system.smoothing_length,
+                                        pressure=ps_before_update)
     TrixiParticles.trixi2vtk(ic_before_update, filename="ic_before_update")
 
     TrixiParticles.update_smoothing_lengths!(fluid_system, v_ode, u_ode, semi)
 
     u = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
-    ps_after_update = [TrixiParticles.particle_spacing(fluid_system, particle) for particle in TrixiParticles.eachparticle(fluid_system)]
-    ic_after_update = InitialCondition(coordinates=u, density=1000.0, mass=fluid_system.smoothing_length, pressure=ps_after_update)
+    ps_after_update = [TrixiParticles.particle_spacing(fluid_system, particle)
+                       for particle in TrixiParticles.eachparticle(fluid_system)]
+    ic_after_update = InitialCondition(coordinates=u, density=1000.0,
+                                       mass=fluid_system.smoothing_length,
+                                       pressure=ps_after_update)
     TrixiParticles.trixi2vtk(ic_after_update, filename="ic_after_update")
 
     TrixiParticles.shift_particles!(fluid_system, v_ode, u_ode, semi, 0.01)
 
     u = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
-    ps_after_shift = [TrixiParticles.particle_spacing(fluid_system, particle) for particle in TrixiParticles.eachparticle(fluid_system)]
-    ic_after_shift = InitialCondition(coordinates=u, density=1000.0, mass=fluid_system.smoothing_length, pressure=ps_after_shift)
+    ps_after_shift = [TrixiParticles.particle_spacing(fluid_system, particle)
+                      for particle in TrixiParticles.eachparticle(fluid_system)]
+    ic_after_shift = InitialCondition(coordinates=u, density=1000.0,
+                                      mass=fluid_system.smoothing_length,
+                                      pressure=ps_after_shift)
     TrixiParticles.trixi2vtk(ic_after_shift, filename="ic_after_shift")
 
     # TrixiParticles.@autoinfiltrate
-end 
-
+end

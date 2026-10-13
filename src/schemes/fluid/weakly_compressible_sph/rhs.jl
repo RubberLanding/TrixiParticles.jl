@@ -85,7 +85,6 @@ function interact!(dv, v_particle_system, u_particle_system,
                                                 distance, grad_kernel, correction)
             dv_particle[] += dv_pressure * pressure_correction
 
-
             # Propagate `@inbounds` to the viscosity function, which accesses particle data
             @inbounds dv_viscosity!(dv_particle, viscosity,
                                     particle_system, neighbor_system,

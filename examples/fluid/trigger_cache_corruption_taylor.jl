@@ -7,7 +7,6 @@ using OrdinaryDiffEqCore
 using OrdinaryDiffEqLowStorageRK
 using StaticArrays
 
-# Added missing definitions to make the script executable
 refine = true
 refinement = nothing
 
@@ -82,8 +81,8 @@ fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_le
 periodic_box = PeriodicBox(min_corner=[0.0, 0.0], max_corner=[box_length, box_length])
 
 @inline function each_active_particle(system::AbstractFluidSystem, buffer)
-        return 1:buffer.active_particle_count[]
-    end
+    return 1:buffer.active_particle_count[]
+end
 
 semi = Semidiscretization(fluid_system,
                           neighborhood_search=TrivialNeighborhoodSearch{2}(; periodic_box))
@@ -95,36 +94,38 @@ saving_callback = SolutionSavingCallback(interval=1)
 pp_callback = nothing
 
 if refine
-    refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept == 1,
+    refinement_callback = DiscreteCallback((u, t,
+                                            integrator) -> integrator.stats.naccept == 1,
                                            (integrator) -> begin
-                                                # EDAC systems integrate velocity (v), position (u), and pressure (p)
-                                                v_ode = integrator.u.x[1]
-                                                u_ode = integrator.u.x[2]
-                                                p_ode = integrator.u.x[3]
-                                               
-                                                # Activate the 1 buffer particle by appending it to the state arrays.
-                                                # Pushing it to 1e16 intentionally triggers the NaN.
-                                                append!(v_ode, [0.0, 0.0])
-                                                append!(u_ode, [1e16, 1e16])
-                                                append!(p_ode, [0.0])
+                                               # EDAC systems integrate velocity (v), position (u), and pressure (p)
+                                               v_ode = integrator.u.x[1]
+                                               u_ode = integrator.u.x[2]
+                                               p_ode = integrator.u.x[3]
 
-                                                # Dynamically extract lengths to handle the 3-part EDAC partition correctly
-                                                new_sizes = length.(integrator.u.x)
-                                                resize!(integrator, tuple(new_sizes...))
-                                                
-                                                # TrixiParticles.@autoinfiltrate
+                                               # Activate the 1 buffer particle by appending it to the state arrays.
+                                               # Pushing it to 1e16 intentionally triggers the NaN.
+                                               append!(v_ode, [0.0, 0.0])
+                                               append!(u_ode, [1e16, 1e16])
+                                               append!(p_ode, [0.0])
 
-                                                # This forces f(du, u, p, t) to evaluate the new 1e16 particle immediately
-                                                derivative_discontinuity!(integrator, true)
-                                             end,
+                                               # Dynamically extract lengths to handle the 3-part EDAC partition correctly
+                                               new_sizes = length.(integrator.u.x)
+                                               resize!(integrator, tuple(new_sizes...))
+
+                                               # TrixiParticles.@autoinfiltrate
+
+                                               # This forces f(du, u, p, t) to evaluate the new 1e16 particle immediately
+                                               derivative_discontinuity!(integrator, true)
+                                           end,
                                            save_positions=(false, false))
 end
 
-callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), refinement_callback)
+callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(),
+                        refinement_callback)
 
 dt_max = min(smoothing_length / 4 * (sound_speed + U), smoothing_length^2 / (8 * nu))
 
 sol = solve(ode, RDPK3SpFSAL49(),
-            abstol=1e-8, 
-            reltol=1e-4, 
+            abstol=1e-8,
+            reltol=1e-4,
             dtmax=dt_max, save_everystep=false, callback=callbacks);
