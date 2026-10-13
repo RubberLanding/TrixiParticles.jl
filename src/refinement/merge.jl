@@ -99,6 +99,7 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
 
     inv_ndims = one(ELTYPE) / NDIMS
     kernel_0_1 = kernel(smoothing_kernel, zero(ELTYPE), one(ELTYPE))
+    periodic_box = get_neighborhood_search(system, semi).periodic_box
 
     # Merge and delete particles
     @threaded semi for particle in eachparticle(system)
@@ -118,10 +119,15 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
             pos_a = current_coords(u, system, particle)
             pos_b = current_coords(u, system, candidate)
 
+            # Compute the shortest distance between both points to correctly calculate 
+            # the merged position. Without unwrapping, particles on opposite periodic boundaries 
+            # would incorrectly average out and merge into the center of the domain.            pos_diff = shortest_periodic_diff(pos_a, pos_b, periodic_box)
+            pos_b_unwrapped = pos_a + pos_diff
+            pos_merge_unwrapped = (m_a * pos_a + m_b * pos_b_unwrapped) / m_merge
+            pos_merge = PointNeighbors.periodic_coords(pos_merge_unwrapped, periodic_box)
+
             vel_a = current_velocity(v, system, particle)
             vel_b = current_velocity(v, system, candidate)
-
-            pos_merge = (m_a * pos_a + m_b * pos_b) / m_merge
             vel_merge = (m_a * vel_a + m_b * vel_b) / m_merge
 
             # Update position and velocity (Eq. 32 and 33)
@@ -148,4 +154,13 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     end
 
     return system
+end
+
+@inline shortest_periodic_diff(pos_a, pos_b, ::Nothing) = pos_b - pos_a
+
+# Compute the shortest difference vector between points a and b
+@inline function shortest_periodic_diff(pos_a, pos_b, periodic_box)
+    domain_size = periodic_box.size
+    diff = pos_b - pos_a
+    return diff .- domain_size .* round.(diff ./ domain_size)
 end
