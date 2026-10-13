@@ -79,7 +79,6 @@ cylinder = SphereShape(min_spacing, cylinder_diameter / 2,
 
 fluid = setdiff(pipe.fluid, cylinder)
 
-
 # ==========================================================================================
 # ==== Fluid
 smoothing_length_ratio = 1.5
@@ -101,7 +100,7 @@ y_min = 0.4
 y_max = 0.6
 
 box_logic = (system, particle, v, u,
-            semi) -> begin
+             semi) -> begin
     pos = TrixiParticles.current_coords(u, system, particle)
     return (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
 end
@@ -119,11 +118,11 @@ n_childs = TrixiParticles.nchilds(refinement.splitting_pattern)
 
 # Change 1.2 to 5 if you want to avoid a global resize in the first refinement
 n_buffer_refinement = ceil(Int32,
-                        1.2 * n_childs * (x_max - x_min) *
-                        (y_max - y_min) / particle_spacing^2)
+                           1.2 * n_childs * (x_max - x_min) *
+                           (y_max - y_min) / particle_spacing^2)
 n_buffer_particles = n_buffer_inlet + n_buffer_refinement
 
-refine = true 
+refine = true
 
 fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
                                            sound_speed,
@@ -179,7 +178,8 @@ boundary_system_wall = WallBoundarySystem(wall, boundary_model_wall)
 # Remove `state_equation` keyword argument, keep viscosity
 boundary_model_cylinder = BoundaryModelDummyParticles(cylinder.density, cylinder.mass,
                                                       AdamiPressureExtrapolation(),
-                                                      smoothing_kernel, smoothing_length_min;
+                                                      smoothing_kernel,
+                                                      smoothing_length_min;
                                                       viscosity)
 
 boundary_system_cylinder = WallBoundarySystem(cylinder, boundary_model_cylinder)
@@ -202,16 +202,18 @@ info_callback = InfoCallback(interval=50)
 
 function system_smoothing_length(system, dv_ode, du_ode, v_ode, u_ode, semi, t)
     return zero(eltype(system))
-end 
+end
 
-function system_smoothing_length(system::TrixiParticles.AbstractFluidSystem, dv_ode, du_ode, v_ode, u_ode, semi, t)
+function system_smoothing_length(system::TrixiParticles.AbstractFluidSystem, dv_ode, du_ode,
+                                 v_ode, u_ode, semi, t)
     return view(system.smoothing_length, TrixiParticles.each_active_particle(system))
-end 
+end
 
 saving_callback = SolutionSavingCallback(interval=1)
 if refine
-    saving_callback = SolutionSavingCallback(interval=1, my_custom_quantity=system_smoothing_length)
-end 
+    saving_callback = SolutionSavingCallback(interval=1,
+                                             my_custom_quantity=system_smoothing_length)
+end
 
 extra_callback = nothing
 
@@ -227,9 +229,9 @@ u_tmp = similar(ode.u0.x[2])
 
 function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
     # Collect all history and intermediate caches
-    caches_to_clean = [integrator.uprev, OrdinaryDiffEqCore.full_cache(integrator)..., 
-                       integrator.fsalfirst, integrator.fsallast]
-    
+    caches_to_clean = [integrator.uprev, OrdinaryDiffEqCore.full_cache(integrator)...,
+        integrator.fsalfirst, integrator.fsallast]
+
     # 1. SHIFT UPREV AND WIPE INTERMEDIATE CACHES
     for c in caches_to_clean
         # Skip invalid caches or caches of a different type
@@ -246,13 +248,13 @@ function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
             for sys_idx in reverse(eachindex(semi.systems))
                 r_v_old = old_ranges_v[sys_idx]
                 r_v_new = semi.ranges_v[sys_idx]
-                
+
                 r_u_old = old_ranges_u[sys_idx]
                 r_u_new = semi.ranges_u[sys_idx]
-                
+
                 len_v = min(length(r_v_old), length(r_v_new))
                 len_u = min(length(r_u_old), length(r_u_new))
-                
+
                 # Base.copyto! safely handles overlapping memory
                 if len_v > 0
                     copyto!(c.x[1], first(r_v_new), c.x[1], first(r_v_old), len_v)
@@ -272,22 +274,22 @@ function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
     for (sys_idx, sys) in enumerate(semi.systems)
         r_v_new = semi.ranges_v[sys_idx]
         r_u_new = semi.ranges_u[sys_idx]
-        
+
         n_vars_v = size(TrixiParticles.wrap_v(integrator.u.x[1], sys, semi), 1)
         n_vars_u = size(TrixiParticles.wrap_u(integrator.u.x[2], sys, semi), 1)
-        
+
         active_v_len = length(r_v_new)
         active_u_len = length(r_u_new)
-        
+
         # Calculate true active lengths using the buffer[cite: 7]
         if hasproperty(sys, :buffer) && hasproperty(sys.buffer, :active_particle_count)
             active_v_len = sys.buffer.active_particle_count[] * n_vars_v
             active_u_len = sys.buffer.active_particle_count[] * n_vars_u
         end
-        
+
         inactive_v_range = (first(r_v_new) + active_v_len):last(r_v_new)
         inactive_u_range = (first(r_u_new) + active_u_len):last(r_u_new)
-        
+
         # Zero out the inactive gaps in both `u` and `uprev`
         for c in caches_to_clean
             if !isnothing(c) && typeof(c) == typeof(integrator.u)
@@ -305,91 +307,112 @@ function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
 end
 
 if refine
-    refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept == 10,
+    refinement_callback = DiscreteCallback((u, t,
+                                            integrator) -> integrator.stats.naccept == 10,
                                            (integrator) -> begin
                                                v_ode = integrator.u.x[1]
                                                u_ode = integrator.u.x[2]
                                                semi = integrator.p.semi
                                                system = semi.systems[1]
 
-                                             #   TrixiParticles.@autoinfiltrate
+                                               #   TrixiParticles.@autoinfiltrate
 
                                                length_u_before = length(u_ode)
                                                length_v_before = length(v_ode)
                                                old_ranges_v = copy(semi.ranges_v)
                                                old_ranges_u = copy(semi.ranges_u)
 
-                                                # TrixiParticles.@autoinfiltrate
+                                               # TrixiParticles.@autoinfiltrate
 
-                                               TrixiParticles.reset_refinement!(system, semi)
+                                               TrixiParticles.reset_refinement!(system,
+                                                                                semi)
 
                                                # Move active particles to the start and inactive particles to the end
                                                # Update self-interaction nhs
-                                               TrixiParticles.compact_system!(system, v_ode, u_ode, semi)
+                                               TrixiParticles.compact_system!(system, v_ode,
+                                                                              u_ode, semi)
                                                neighborhood_search = TrixiParticles.get_neighborhood_search(system,
-                                                                                             semi)
-                                               TrixiParticles.update_nhs!(neighborhood_search, system,
-                                                           system, u_ode, u_ode, semi)
-
-                                               # Apply refinement criterion 
-                                               TrixiParticles.apply_refinement_criteria!(system, v_ode,
+                                                                                                            semi)
+                                               TrixiParticles.update_nhs!(neighborhood_search,
+                                                                          system,
+                                                                          system, u_ode,
                                                                           u_ode, semi)
 
-                                             #   TrixiParticles.@autoinfiltrate
+                                               # Apply refinement criterion 
+                                               TrixiParticles.apply_refinement_criteria!(system,
+                                                                                         v_ode,
+                                                                                         u_ode,
+                                                                                         semi)
+
+                                               #   TrixiParticles.@autoinfiltrate
 
                                                # Update the spacing of particles
-                                               TrixiParticles.update_particle_spacing(system, v_ode, u_ode,
-                                                                       semi)
+                                               TrixiParticles.update_particle_spacing(system,
+                                                                                      v_ode,
+                                                                                      u_ode,
+                                                                                      semi)
 
-                                             #   TrixiParticles.@autoinfiltrate
+                                               #   TrixiParticles.@autoinfiltrate
 
                                                # Split the particles
-                                               TrixiParticles.split_particles!(semi, v_ode, u_ode, v_tmp,
-                                                                u_tmp)
+                                               TrixiParticles.split_particles!(semi, v_ode,
+                                                                               u_ode, v_tmp,
+                                                                               u_tmp)
 
-                                            #    TrixiParticles.@autoinfiltrate
+                                               #    TrixiParticles.@autoinfiltrate
 
                                                # Merge the particles
-                                               TrixiParticles.merge_particles!(system, v_ode, u_ode, semi)
+                                               TrixiParticles.merge_particles!(system,
+                                                                               v_ode, u_ode,
+                                                                               semi)
 
-                                               TrixiParticles.@autoinfiltrate
+                                            #    TrixiParticles.@autoinfiltrate
 
                                                # Move active particles to the start and inactive particles to the end
-                                               TrixiParticles.compact_system!(system, v_ode, u_ode, semi)
-                                               
-                                            #    TrixiParticles.@autoinfiltrate
+                                               TrixiParticles.compact_system!(system, v_ode,
+                                                                              u_ode, semi)
+
+                                               #    TrixiParticles.@autoinfiltrate
 
                                                # After adding and deleting particles,
                                                # we need to update the searches for all systems
                                                TrixiParticles.update_nhs!(semi, u_ode)
 
-                                            #    TrixiParticles.@autoinfiltrate
+                                               #    TrixiParticles.@autoinfiltrate
 
                                                # Update smoothing lengths
-                                               TrixiParticles.update_smoothing_lengths!(system, v_ode,
-                                                                         u_ode, semi)
-                                                                        
-                                            #    TrixiParticles.@autoinfiltrate
+                                               TrixiParticles.update_smoothing_lengths!(system,
+                                                                                        v_ode,
+                                                                                        u_ode,
+                                                                                        semi)
 
-                                            #    # Shift the particles and correct the particle properties
-                                               TrixiParticles.shift_particles!(system, v_ode, u_ode, semi,
-                                                                integrator.dt)
+                                               #    TrixiParticles.@autoinfiltrate
 
-                                            #    TrixiParticles.@autoinfiltrate
+                                               #    # Shift the particles and correct the particle properties
+                                               TrixiParticles.shift_particles!(system,
+                                                                               v_ode, u_ode,
+                                                                               semi,
+                                                                               integrator.dt)
 
-                                                # Expand the solver's internal history caches to match the new physical capacity
-                                                if length(u_ode) > length_u_before
-                                                    resize!(integrator, (length(v_ode), length(u_ode)))
-                                                    resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
-                                                end
+                                               #    TrixiParticles.@autoinfiltrate
 
-                                                # Force the solver to natively recalculate the true fluid derivatives
-                                                derivative_discontinuity!(integrator, true)
-                                                
-                                            #    TrixiParticles.@autoinfiltrate
+                                               # Expand the solver's internal history caches to match the new physical capacity
+                                               if length(u_ode) > length_u_before
+                                                   resize!(integrator,
+                                                           (length(v_ode), length(u_ode)))
+                                                   resize_integrator_cache!(integrator,
+                                                                            semi,
+                                                                            old_ranges_v,
+                                                                            old_ranges_u)
+                                               end
+
+                                               # Force the solver to natively recalculate the true fluid derivatives
+                                               derivative_discontinuity!(integrator, true)
+
+                                               #    TrixiParticles.@autoinfiltrate
 
                                                # next_refine_time[1] += refine_interval
-                                             end,
+                                           end,
                                            save_positions=(false, false))
 end
 
