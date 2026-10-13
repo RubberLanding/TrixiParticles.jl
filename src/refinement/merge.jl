@@ -17,7 +17,7 @@ end
 
 @inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
                                   semi; merge_iter=3)
-    (; buffer, cache) = system
+    (; cache) = system
     (; delete_candidates) = cache
 
     v = wrap_v(v_ode, system, semi)
@@ -36,12 +36,11 @@ end
         apply_merging!(system, refinement, v, u, semi)
         # TrixiParticles.@autoinfiltrate
 
-        # Update the nhs
-        update_system_buffer!(buffer)
+        # Merging creates holes that we need to fix by compacting the system
+        # so all active particles are at the beginning
+        compact_system!(system, v_ode, u_ode, semi)
         neighborhood_search = get_neighborhood_search(system, semi)
         update_nhs!(neighborhood_search, system, system, u, u, semi)
-        # update_nhs(semi, system, system) # Quick fix
-
         # TrixiParticles.@autoinfiltrate
     end
 
@@ -93,7 +92,7 @@ end
 
 function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
     (; smoothing_kernel, cache) = system
-    (; reference_mass, merge_candidates, delete_candidates) = cache
+    (; merge_candidates, delete_candidates) = cache
 
     ELTYPE = eltype(u)
     NDIMS = ndims(system)

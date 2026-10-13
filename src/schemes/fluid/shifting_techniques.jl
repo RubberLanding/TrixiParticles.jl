@@ -505,7 +505,7 @@ end
 
             # Write into the buffer
             for i in eachindex(delta_v_)
-                idx = (particle - 1) * NDIMS + i
+                idx = linear_index_vector(i, particle, NDIMS)
                 @inbounds cache.delta_v[idx] += delta_v_[i]
             end
         end
@@ -551,7 +551,7 @@ function apply_particle_shifting!(u_ode, ::ParticleShiftingTechnique{false},
     # Add δr from the cache to the current coordinates
     @threaded semi for particle in eachparticle(system)
         for i in axes(delta_v, 1)
-            idx = (particle - 1) * NDIMS + i
+            idx = linear_index_vector(i, particle, NDIMS)
             @inbounds u[i, particle] += dt * delta_v[idx]
         end
     end

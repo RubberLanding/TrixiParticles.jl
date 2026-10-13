@@ -214,7 +214,7 @@ end
 
 # TODO: Throw error when creating a FluidSystem with refinement but no buffer
 function compact_system!(system, refinement, v_ode, u_ode, semi)
-    (; buffer) = system
+    (; buffer, cache) = system
     (; active_particle, active_particle_count, eachparticle) = buffer
 
     v = wrap_v(v_ode, system, semi)
@@ -222,7 +222,7 @@ function compact_system!(system, refinement, v_ode, u_ode, semi)
 
     # Sort the system based on the boolean flag
     # Active particles (true) come first, inactive particles (false) are at the end
-    compaction_perm = sortperm(transfer2cpu(active_particle), rev=true)
+    perm = sortperm(transfer2cpu(active_particle), rev=true)
 
     # Note that the following contain also inactive particles
     system_coords = current_coordinates(u, system)
@@ -231,19 +231,34 @@ function compact_system!(system, refinement, v_ode, u_ode, semi)
     system_density = current_density(v, system)
 
     # Apply the compaction to standard data
-    active_particle .= active_particle[compaction_perm]
-    system_coords .= system_coords[:, compaction_perm]
-    system_velocity .= system_velocity[:, compaction_perm]
-    system_pressure .= system_pressure[compaction_perm]
-    system_density .= system_density[compaction_perm]
-    system.mass .= system.mass[compaction_perm]
-    system.smoothing_length .= system.smoothing_length[compaction_perm]
+    active_particle .= active_particle[perm]
+    system_coords .= system_coords[:, perm]
+    system_velocity .= system_velocity[:, perm]
+    system_pressure .= system_pressure[perm]
+    system_density .= system_density[perm]
+    system.mass .= system.mass[perm]
+    system.smoothing_length .= system.smoothing_length[perm]
+
+    # Apply to data in the cache
+    cache.reference_mass .= cache.reference_mass[perm]
+    cache._particle_spacing .= cache._particle_spacing[perm]
+    cache.delete_candidates .= cache.delete_candidates[perm]
 
     # Update buffer
     active_particle_count[] = count(active_particle)
     eachparticle[1:buffer.active_particle_count[]] .= 1:active_particle_count[]
 
     return buffer
+end
+
+# For Vectors (e.g., delta_v, grad_density, grad_pressure)
+@inline function linear_index_vector(i, particle, NDIMS)
+    return (particle - 1) * NDIMS + i
+end
+
+# For Matrices/Tensors (e.g., grad_velocity)
+@inline function linear_index_matrix(i, j, particle, NDIMS)
+    return (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
 end
 
 include("shifting.jl")

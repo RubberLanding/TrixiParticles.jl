@@ -50,11 +50,12 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
 
     # Only allocate the backup arrays once, 
     # or if v_ode and u_ode expanded after a deep resize
-    if isnothing(refinement_callback.v_tmp) || length(refinement_callback.v_tmp) < length(v_ode)
+    if isnothing(refinement_callback.v_tmp) ||
+       length(refinement_callback.v_tmp) < length(v_ode)
         refinement_callback.v_tmp = similar(v_ode)
         refinement_callback.u_tmp = similar(u_ode)
     end
-    
+
     v_tmp = refinement_callback.v_tmp
     u_tmp = refinement_callback.u_tmp
 
@@ -70,7 +71,7 @@ function (refinement_callback::ParticleRefinementCallback)(integrator)
     # Force the solver to recalculate derivatives 
     # due to compaction, particle splitting and particle merging
     SciMLBase.derivative_discontinuity!(integrator, true)
-    
+
     return integrator
 end
 
