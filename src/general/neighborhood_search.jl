@@ -51,21 +51,21 @@ function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
 end
 
 @propagate_inbounds function foreach_neighbor(f, system_coords, neighbor_coords,
-                                              neighborhood_search, backend, particle)
+                                              neighborhood_search, backend, particle; kwargs...)
     PointNeighbors.foreach_neighbor(f, system_coords, neighbor_coords,
-                                    neighborhood_search, particle)
+                                    neighborhood_search, particle; kwargs...)
 end
 
 # We cannot dispatch by `AbstractGPUArray` because this is called from within
 # a kernel, where the arrays are device arrays (like `CuDeviceArray`),
 # which are not `AbstractGPUArray`s.
 @inline function foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search,
-                                  backend::KernelAbstractions.GPU, particle)
+                                  backend::KernelAbstractions.GPU, particle; kwargs...)
     # On GPUs, remove all bounds checks for maximum performance.
     # Note that this is not safe if the neighborhood search was not initialized correctly.
     # For example, this is unsafe when benchmarking `interact!` with the wrong NHS.
     PointNeighbors.foreach_neighbor_unsafe(f, system_coords, neighbor_coords,
-                                           neighborhood_search, particle)
+                                           neighborhood_search, particle; kwargs)
 end
 
 # === Compact support selection ===
@@ -74,6 +74,13 @@ end
     (; smoothing_kernel) = system
     # TODO: Variable search radius for NHS?
     return compact_support(smoothing_kernel, initial_smoothing_length(system))
+end
+
+@inline function compact_support(system::AbstractFluidSystem, neighbor, point)
+    (; smoothing_kernel) = system
+    smoothing_length = system.smoothing_length[point]
+
+    return compact_support(smoothing_kernel, smoothing_length)
 end
 
 # -- Open boundary systems
@@ -88,6 +95,7 @@ end
     # Use the compact support of the fluid
     return compact_support(system.fluid_system, neighbor.fluid_system)
 end
+
 
 @inline function compact_support(system::OpenBoundarySystem, neighbor::RigidBodySystem)
     # Rigid/open-boundary interactions are currently not modeled.

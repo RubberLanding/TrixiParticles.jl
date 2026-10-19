@@ -64,6 +64,10 @@ end
     return view(buffer.eachparticle, 1:buffer.active_particle_count[])
 end
 
+@inline function each_active_particle(system::AbstractFluidSystem, ::Nothing)
+    return Base.OneTo(nparticles(system))    
+end 
+
 @inline function each_active_particle(system::AbstractFluidSystem, buffer)
     return each_active_particle(system, system.particle_refinement, buffer)
 end

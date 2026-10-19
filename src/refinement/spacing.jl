@@ -26,7 +26,7 @@ end
     v = wrap_v(v_ode, fluid_system, semi)
     system_coords = current_coordinates(u, fluid_system)
 
-    for particle in eachparticle(fluid_system)
+    @threaded semi for particle in eachparticle(fluid_system)
         spacing_min, spacing_max,
         spacing_avg = min_max_avg_spacing(fluid_system, semi, u_ode, system_coords,
                                           particle)
@@ -52,19 +52,21 @@ end
     spacing_max = zero(eltype(system))
     spacing_avg = zero(eltype(system))
     counter_neighbors = 0
+    particle_radius = compact_support(system, system, particle) 
 
     foreach_system(semi) do neighbor_system
         neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
 
         u_neighbor_system = wrap_u(u_ode, neighbor_system, semi)
         neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
+        neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
+        backend = semi.parallelization_backend
 
         if neighbor_system isa AbstractFluidSystem &&
            !isnothing(neighbor_system.particle_refinement)
-            PointNeighbors.foreach_neighbor(system_coords, neighbor_coords,
-                                            neighborhood_search,
-                                            particle) do particle, neighbor, pos_diff,
-                                                         distance
+            @inbounds foreach_neighbor(system_coords, neighbor_coords,
+                                    neighborhood_search, backend,
+                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
                 neighbor_spacing = _particle_spacing[neighbor]
                 spacing_min = min(spacing_min, neighbor_spacing)
                 spacing_max = max(spacing_max, neighbor_spacing)
@@ -72,10 +74,12 @@ end
                 counter_neighbors += 1
             end
         else
-            PointNeighbors.foreach_neighbor(system_coords, neighbor_coords,
-                                            neighborhood_search,
-                                            particle) do particle, neighbor, pos_diff,
+            @inbounds foreach_neighbor(system_coords, neighbor_coords,
+                                    neighborhood_search, backend,
+                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
                                                          distance
+                # TODO: This is a constant for most systems and can be moved 
+                # out of the loop
                 neighbor_spacing = particle_spacing(neighbor_system, neighbor)
                 spacing_min = min(spacing_min, neighbor_spacing)
                 spacing_max = max(spacing_max, neighbor_spacing)

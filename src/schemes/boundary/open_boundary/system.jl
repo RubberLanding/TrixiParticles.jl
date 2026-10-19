@@ -469,6 +469,11 @@ function check_domain!(system, v, u, v_ode, u_ode, semi)
     update_system_buffer!(system.buffer)
     update_system_buffer!(fluid_system.buffer)
 
+    # Transferring particles in and out of the open boundary,
+    # creates holes that we need to fix when using refinement 
+    # by compacting the fluid system
+    compact_system!(fluid_system, v_ode, u_ode, semi)
+
     # Since particles have been transferred, the neighborhood searches must be updated
     update_nhs!(semi, u_ode)
 
@@ -834,7 +839,6 @@ function check_boundary_zone_widths(boundary_zones, fluid_system)
     support = compact_support(system_smoothing_kernel(fluid_system),
                               initial_smoothing_length(fluid_system))
     minimum_width = 2 * support
-
     for (i, zone) in enumerate(boundary_zones)
         if zone.zone_width < minimum_width
             throw(ArgumentError("boundary zone $i has width $(zone.zone_width), " *

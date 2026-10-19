@@ -87,44 +87,43 @@ end
                                            u_ode,
                                            semi)
     (; splitting_pattern) = refinement
+    (; epsilon) = splitting_pattern
     (; reference_mass, split_candidates, delete_candidates) = system.cache
+    smoothing_length_ratio = initial_smoothing_length(system) / system.initial_condition.particle_spacing
 
     split_candidates .= false
     @threaded semi for particle in eachparticle(system)
         is_alive = !delete_candidates[particle]
         particle_mass = hydrodynamic_mass(system, particle)
         particle_mass_max = 1.05 * reference_mass[particle]
-
         split_candidates[particle] = is_alive && (particle_mass > particle_mass_max)
     end
 
-    # Explicitly check whether a split candidate will create 
-    # children inside a boundary or solid 
     u = wrap_u(u_ode, system, semi)
     system_coords = current_coordinates(u, system)
-    backend=semi.parallelization_backend
+    backend = semi.parallelization_backend
 
-    @threaded semi for particle in eachindex(split_candidates)
-        !split_candidates[particle] && return
-        h = smoothing_length(system, particle)
-        split_radius = h * refinement.splitting_pattern.epsilon
-
-        # Loop over all systems in the semidiscretization
-        foreach_system(semi) do neighbor_system
-            # Skip checking fluid systems against themselves (we only care about boundaries)
-            !isa(neighbor_system, Union{AbstractBoundarySystem, AbstractStructureSystem}) &&
-                return
-            min_distance = split_radius +
-                           (neighbor_system.initial_condition.particle_spacing * 0.5)
-
-            u_neighbor = wrap_u(u_ode, neighbor_system, semi)
-            neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
-            nhs = get_neighborhood_search(system, neighbor_system, semi)
-            foreach_neighbor(system_coords, neighbor_coords, nhs, backend,
-                             particle) do particle, neighbor, pos_diff, distance
-
-                # If the split candidate is too close to 
-                # any boundary or solid, stop the split
+    # Loop over the neighboring systems to avoid race condition
+    # when writing `split_candidates`
+    foreach_system(semi) do neighbor_system
+        !isa(neighbor_system, Union{AbstractBoundarySystem, AbstractStructureSystem}) && return
+            
+        neighbor_system_spacing = neighbor_system.initial_condition.particle_spacing
+        
+        u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+        neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
+        neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
+        
+        @threaded semi for particle in eachparticle(system)
+            !split_candidates[particle] && return
+            
+            split_radius = epsilon * smoothing_length_ratio * particle_spacing(system, particle)
+            min_distance = split_radius + 0.5 * neighbor_system_spacing
+            particle_radius = compact_support(system, system, particle) 
+            
+            @inbounds foreach_neighbor(system_coords, neighbor_coords,
+                                       neighborhood_search, backend,
+                                       particle; search_radius=particle_radius) do particle, neighbor, _, distance
                 if distance < min_distance
                     split_candidates[particle] = false
                 end
@@ -181,8 +180,6 @@ end
 
             rel_pos = smoothing_length_old * relative_position[child_id_local]
             new_pos = pos_particle + rel_pos
-
-            global_child_idx > 10837 && TrixiParticles.@autoinfiltrate
 
             set_particle_mass!(system, global_child_idx, mass_new)
             set_particle_smoothing_length!(system, global_child_idx, smoothing_length_new)

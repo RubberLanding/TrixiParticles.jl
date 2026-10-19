@@ -7,13 +7,14 @@ struct ParticleRefinement{RC, ELTYPE, SP, SC}
     criteria                :: RC        # Tuple of all refinement criteria to be applied, e.g. `SpatialRefinementCriterion` and `SolutionRefinementCriterion`` 
     spacing_ratio           :: ELTYPE    # Ratio between spacings of different refinement bands, should be between 1.05 and 1.20     
     min_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
+    max_spacing             :: ELTYPE    # The minimum spacing being used in either boundaries or solids  
     smoothing_length_factor :: ELTYPE    # Constant corresponding to the value of smoothing length factor (= smoothing_length / particle_spacing) used in the simulation, see Eq. 35 for the merging proceduce
     splitting_pattern       :: SP
     shifting_technique      :: SC
     reference_density       :: ELTYPE
 end
 
-function ParticleRefinement(; spacing_ratio, min_spacing,
+function ParticleRefinement(; spacing_ratio, min_spacing, max_spacing,
                             reference_density,
                             smoothing_length_factor=1.2,
                             refinement_criteria=SpatialRefinementCriterion(),
@@ -23,7 +24,7 @@ function ParticleRefinement(; spacing_ratio, min_spacing,
         refinement_criteria = (refinement_criteria,)
     end
 
-    return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing,
+    return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing, max_spacing,
                               smoothing_length_factor,
                               splitting_pattern,
                               shifting_technique, reference_density)
@@ -93,6 +94,7 @@ function create_cache_refinement(initial_condition, refinement)
     split_candidates = zeros(Bool, n_particles)
     merge_candidates = zeros(Int, n_particles)
 
+    is_boundary_adjacent = zeros(Bool, n_particles)
     reference_mass = zeros(ELTYPE, n_particles)
     _particle_spacing = zeros(ELTYPE, n_particles)
 
@@ -107,7 +109,7 @@ function create_cache_refinement(initial_condition, refinement)
     grad_velocity = zeros(ELTYPE, NDIMS * NDIMS * n_particles)
 
     return (; delete_candidates, split_candidates, merge_candidates,
-            reference_mass, _particle_spacing,
+            is_boundary_adjacent, reference_mass, _particle_spacing,
             candidate_flags, candidate_offsets,
             neighbor_mass, neighbor_count, grad_density, grad_pressure, grad_velocity)
 end
@@ -171,8 +173,6 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
     (; neighbor_mass, neighbor_count) = system.cache
 
     u = wrap_u(u_ode, system, semi)
-    v = wrap_v(v_ode, system, semi)
-
     system_coords = current_coordinates(u, system)
     set_zero!(neighbor_mass)
     set_zero!(neighbor_count)
@@ -180,17 +180,21 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
     ELTYPE = eltype(u)
     inv_ndims = one(ELTYPE) / ndims(system)
 
-    # Calculate the total neighborhood mass around a particle 
-    foreach_point_neighbor(system, system, system_coords, system_coords,
-                           semi) do particle, neighbor, pos_diff, distance
-        neighbor_mass[particle] += hydrodynamic_mass(system, neighbor)
-        neighbor_count[particle] += 1
+    neighborhood_search = get_neighborhood_search(system, semi) 
+    backend = semi.parallelization_backend
+
+    @threaded semi for particle in eachparticle(system)
+        particle_radius = compact_support(system, system, particle) 
+        @inbounds foreach_neighbor(system_coords, system_coords,
+                                   neighborhood_search, backend,
+                                   particle; search_radius=particle_radius) do particle, neighbor, _, _
+            neighbor_mass[particle] += hydrodynamic_mass(system, neighbor)
+            neighbor_count[particle] += 1
+        end
     end
-
-    # TrixiParticles.@autoinfiltrate
-
+    
     # Update the smoothing length with the average neighborhood mass (Eq. 35)
-    @threaded semi for particle in eachindex(neighbor_mass)
+    @threaded semi for particle in eachparticle(system)
         neighbor_count[particle] == 0 && return
 
         avg_volume = neighbor_mass[particle] *

@@ -131,7 +131,7 @@ end
 
 # TODO: Resize data specific to WCSPH cache
 function resize_system_cache!(system::WeaklyCompressibleSPHSystem, n)
-    return cache
+    return system.cache
 end
 
 # TODO: Resize data specific to EDAC cache
@@ -147,13 +147,14 @@ function resize_system_cache!(system::EntropicallyDampedSPHSystem, n)
 end
 
 function resize_refinement_cache!(system::AbstractFluidSystem, n)
-    (; reference_mass, _particle_spacing, candidate_flags,
+    (; is_boundary_adjacent, reference_mass, _particle_spacing, candidate_flags,
      candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density,
      grad_pressure, grad_velocity,
      delete_candidates, split_candidates, merge_candidates) = system.cache
 
     NDIMS = ndims(system)
 
+    resize!(is_boundary_adjacent, n)
     resize!(reference_mass, n)
     resize!(_particle_spacing, n)
     resize!(candidate_flags, n)

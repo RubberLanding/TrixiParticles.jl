@@ -28,8 +28,10 @@ end
         delete_candidates[particle] = false
     end
 
+    # TrixiParticles.@autoinfiltrate
+    
     # Merge the particles
-    for _ in 1:merge_iter
+    for i in 1:merge_iter
         # TrixiParticles.@autoinfiltrate
         collect_merge_candidates!(system, refinement, v, u, semi)
         # TrixiParticles.@autoinfiltrate
@@ -53,38 +55,41 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
 
     set_zero!(merge_candidates)
     system_coords = current_coordinates(u, system)
+    neighborhood_search = get_neighborhood_search(system, semi)
+    backend = semi.parallelization_backend
 
     # Collect merge candidates
-    foreach_point_neighbor(system, system, system_coords, system_coords,
-                           semi) do particle, neighbor, pos_diff, distance
-        # Do not merge a particle that was deleted
-        delete_candidates[particle] && return
+    @threaded semi for particle in eachparticle(system)
+        particle_radius = compact_support(system, system, particle) 
+        @inbounds foreach_neighbor(system_coords, system_coords,
+                                   neighborhood_search, backend,
+                                   particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+            # Do not merge a particle that was deleted
+            delete_candidates[particle] && return
+            delete_candidates[neighbor] && return
+            particle == neighbor && return
 
-        # neighbor == 26 && TrixiParticles.@autoinfiltrate
-        delete_candidates[neighbor] && return
+            # Do not merge particle if distance >= (h_a + h_b) / 2
+            h_a = smoothing_length(system, particle)
+            h_b = smoothing_length(system, neighbor)
+            distance >= (h_a + h_b) / 2 && return
 
-        particle == neighbor && return
+            # Do not merge particles if m_a + m_b >= max(m_max_a, m_max_b)
+            m_merge = hydrodynamic_mass(system, particle) + hydrodynamic_mass(system, neighbor)
+            m_merge >=
+            spacing_ratio * max(reference_mass[particle], reference_mass[neighbor]) && return
 
-        # Do not merge particle if distance >= (h_a + h_b) / 2
-        h_a = smoothing_length(system, particle)
-        h_b = smoothing_length(system, neighbor)
-        distance >= (h_a + h_b) / 2 && return
+            # TrixiParticles.@autoinfiltrate
 
-        # Do not merge particles if m_a + m_b >= max(m_max_a, m_max_b)
-        m_merge = hydrodynamic_mass(system, particle) + hydrodynamic_mass(system, neighbor)
-        m_merge >=
-        spacing_ratio * max(reference_mass[particle], reference_mass[neighbor]) && return
-
-        # TrixiParticles.@autoinfiltrate
-
-        if merge_candidates[particle] == 0
-            merge_candidates[particle] = neighbor
-        else
-            stored_neighbor = current_coords(u, system, merge_candidates[particle])
-            pos_diff_stored = stored_neighbor - current_coords(u, system, particle)
-
-            if distance < norm(pos_diff_stored)
+            if merge_candidates[particle] == 0
                 merge_candidates[particle] = neighbor
+            else
+                stored_neighbor = current_coords(u, system, merge_candidates[particle])
+                pos_diff_stored = stored_neighbor - current_coords(u, system, particle)
+
+                if distance < norm(pos_diff_stored)
+                    merge_candidates[particle] = neighbor
+                end
             end
         end
     end
@@ -121,7 +126,8 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
 
             # Compute the shortest distance between both points to correctly calculate 
             # the merged position. Without unwrapping, particles on opposite periodic boundaries 
-            # would incorrectly average out and merge into the center of the domain.            pos_diff = shortest_periodic_diff(pos_a, pos_b, periodic_box)
+            # would incorrectly average out and merge into the center of the domain.            
+            pos_diff = shortest_periodic_diff(pos_a, pos_b, periodic_box)
             pos_b_unwrapped = pos_a + pos_diff
             pos_merge_unwrapped = (m_a * pos_a + m_b * pos_b_unwrapped) / m_merge
             pos_merge = PointNeighbors.periodic_coords(pos_merge_unwrapped, periodic_box)
