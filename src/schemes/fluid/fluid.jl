@@ -179,7 +179,7 @@ function update_positions!(system::AbstractFluidSystem, v, u, v_ode, u_ode, semi
     # This function deactivates particles that move outside the bounding box to prevent
     # simulation crashes.
     # Note that deactivating particles is only possible in combination with a 'SystemBuffer'.
-    deactivate_out_of_bounds_particles!(system, buffer(system), nhs, v, u, semi)
+    deactivate_out_of_bounds_particles!(system, buffer(system), nhs, v_ode, u_ode, semi)
 end
 
 function compute_density!(system, u, u_ode, semi, ::ContinuityDensity)
