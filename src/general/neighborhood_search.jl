@@ -12,30 +12,27 @@ function PointNeighbors.foreach_point_neighbor(f, system::AbstractSystem,
                            points, parallelization_backend)
 end
 
-deactivate_out_of_bounds_particles!(system, buffer, nhs, v, u, semi) = system
+deactivate_out_of_bounds_particles!(system, buffer, nhs, v_ode, u_ode, semi) = system
 
 function deactivate_out_of_bounds_particles!(system, buffer::SystemBuffer,
-                                             nhs::GridNeighborhoodSearch, v, u, semi)
-    deactivate_out_of_bounds_particles!(system, buffer, nhs, nhs.cell_list, v, u, semi)
+                                             nhs::GridNeighborhoodSearch, v_ode, u_ode, semi)
+    deactivate_out_of_bounds_particles!(system, buffer, nhs, nhs.cell_list, v_ode, u_ode, semi)
 end
 
-function deactivate_out_of_bounds_particles!(system, buffer, nhs, cell_list, v, u, semi)
+function deactivate_out_of_bounds_particles!(system, buffer, nhs, cell_list, v_ode, u_ode, semi)
     return system
 end
 
-# `GridNeighborhoodSearch` with a `FullGridCellList` requires a bounding box.
-# This function deactivates particles that move outside the bounding box to prevent
-# simulation crashes.
-# Note that deactivating particles is only possible in combination with a 'SystemBuffer'.
 function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
-                                             cell_list::FullGridCellList, v, u, semi)
+                                             cell_list::FullGridCellList, v_ode, u_ode, semi)
+    u = wrap_u(u_ode, system, semi)
+    v = wrap_v(v_ode, system, semi)
+
     @trixi_timeit timer() "deactivate out of bounds particle" begin
         @threaded semi for particle in each_integrated_particle(system)
             particle_position = current_coords(u, system, particle)
             cell = PointNeighbors.cell_coords(particle_position, nhs)
 
-            # This is the same code as is used in PointNeighbors.jl in `check_cell_bounds`.
-            # It tests that particles are inside the inner grid (without the padding layer for neighbor query).
             if !all(cell[i] in 2:(size(cell_list.linear_indices, i) - 1)
                     for i in eachindex(cell))
                 deactivate_particle!(system, particle, v, u)
@@ -43,11 +40,28 @@ function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
         end
 
         if count(system.buffer.active_particle) != system.buffer.active_particle_count[]
-            update_system_buffer!(system.buffer)
+            # Delegate the cleanup to our dispatch helper
+            deactivation_cleanup(system, v_ode, u_ode, semi)
         end
     end
 
     return system
+end
+
+@inline function deactivation_cleanup(system, v_ode, u_ode, semi)
+    update_system_buffer!(system.buffer)
+end
+
+@inline function deactivation_cleanup(system::AbstractFluidSystem, v_ode, u_ode, semi)
+    deactivation_cleanup(system, system.particle_refinement, v_ode, u_ode, semi)
+end
+
+@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement::Nothing, v_ode, u_ode, semi)
+    update_system_buffer!(system.buffer)
+end
+
+@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
+    compact_system!(system, v_ode, u_ode, semi)
 end
 
 @propagate_inbounds function foreach_neighbor(f, system_coords, neighbor_coords,
@@ -76,14 +90,19 @@ end
     return compact_support(smoothing_kernel, initial_smoothing_length(system))
 end
 
-@inline function compact_support(system::AbstractFluidSystem, neighbor, point)
+@inline function compact_support(system::AbstractFluidSystem, neighbor, particle)
     (; smoothing_kernel) = system
-    smoothing_length = system.smoothing_length[point]
+    smoothing_length = system.smoothing_length[particle]
 
     return compact_support(smoothing_kernel, smoothing_length)
 end
 
 # -- Open boundary systems
+@inline function compact_support(system::OpenBoundarySystem, neighbor, point)
+    # The open boundary particle always uses the system's global constant smoothing length
+    return compact_support(system.smoothing_kernel, initial_smoothing_length(system))
+end
+
 @inline function compact_support(system::OpenBoundarySystem,
                                  neighbor::OpenBoundarySystem)
     # This NHS is never used
@@ -311,6 +330,7 @@ end
 
 # === Neighborhood search updates (per-system) ===
 function update_nhs!(semi, u_ode)
+    # TrixiParticles.@autoinfiltrate
     # Update NHS for each pair of systems
     foreach_system(semi) do system
         u_system = wrap_u(u_ode, system, semi)

@@ -28,7 +28,8 @@ end
         # TrixiParticles.@autoinfiltrate 
 
         # Apply the shifting
-        apply_shift!(u, u_ode, system, semi; theta=0.1, use_dynamic_theta=true, theta_ratio=0.25)
+        apply_shift!(u, u_ode, system, semi; theta=0.1, use_dynamic_theta=true,
+                     theta_ratio=0.25)
 
         # TrixiParticles.@autoinfiltrate 
     end
@@ -48,7 +49,7 @@ end
 # particle spacing (dx_local) and strictly local smoothing length (h_a). It also scales 
 # the displacement using the symmetric local density instead of a global reference density.
 @fastpow function compute_shifting_adapted!(system, refinement::ParticleRefinement,
-                                                 v, u, v_ode, u_ode, semi)
+                                            v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
     (; delta_v) = cache
 
@@ -66,12 +67,13 @@ end
         backend = semi.parallelization_backend
 
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle) 
-            
-            @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                    neighborhood_search, backend,
-                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+            particle_radius = compact_support(system, system, particle)
 
+            @inbounds foreach_neighbor(system_coords, neighbor_coords,
+                                       neighborhood_search, backend,
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 rho_a = @inbounds current_density(v, system, particle)
                 rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -88,7 +90,7 @@ end
 
                 # Use symmetric local density (rho_a + rho_b)
                 delta_r_ = -h_a^2 * (1 + (kernel_weight / Wdx)^4 * 2 / 10) * m_b /
-                        (rho_a + rho_b) * grad_kernel_shift
+                           (rho_a + rho_b) * grad_kernel_shift
 
                 for i in eachindex(delta_r_)
                     idx = linear_index_vector(i, particle, NDIMS)
@@ -108,7 +110,7 @@ end
 # and global reference density. Unlike the original Haftu version below, it mathematically fixes 
 # the kernel evaluation by using xi * h_ab as the target distance.
 @fastpow function compute_shifting_haftu!(system, refinement::ParticleRefinement,
-                                                       v, u, v_ode, u_ode, semi)
+                                          v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
     (; delta_v) = cache
 
@@ -125,11 +127,13 @@ end
         backend = semi.parallelization_backend
 
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle) 
-            
+            particle_radius = compact_support(system, system, particle)
+
             @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                    neighborhood_search, backend,
-                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+                                       neighborhood_search, backend,
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
                 h_a = smoothing_length(system, particle)
@@ -170,7 +174,7 @@ end
 end
 
 @fastpow function compute_gradient_adapted!(system, refinement::ParticleRefinement,
-                                                 v, u, v_ode, u_ode, semi)
+                                            v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
     (; grad_density, grad_velocity, grad_pressure) = cache
 
@@ -189,11 +193,13 @@ end
         backend = semi.parallelization_backend
 
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle) 
-            
+            particle_radius = compact_support(system, system, particle)
+
             @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                    neighborhood_search, backend,
-                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+                                       neighborhood_search, backend,
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 rho_a = @inbounds current_density(v, system, particle)
                 rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -241,7 +247,7 @@ end
 end
 
 @fastpow function compute_gradient_haftu!(system, refinement::ParticleRefinement,
-                                                       v, u, v_ode, u_ode, semi)
+                                          v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
     (; grad_density, grad_velocity, grad_pressure) = cache
     NDIMS = ndims(system)
@@ -259,11 +265,13 @@ end
         neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
         backend = semi.parallelization_backend
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle) 
-            
+            particle_radius = compact_support(system, system, particle)
+
             @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                    neighborhood_search, backend,
-                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+                                       neighborhood_search, backend,
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
                 h_a = smoothing_length(system, particle)

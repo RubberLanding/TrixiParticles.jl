@@ -29,7 +29,7 @@ end
     end
 
     # TrixiParticles.@autoinfiltrate
-    
+
     # Merge the particles
     for i in 1:merge_iter
         # TrixiParticles.@autoinfiltrate
@@ -60,10 +60,12 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
 
     # Collect merge candidates
     @threaded semi for particle in eachparticle(system)
-        particle_radius = compact_support(system, system, particle) 
+        particle_radius = compact_support(system, system, particle)
         @inbounds foreach_neighbor(system_coords, system_coords,
                                    neighborhood_search, backend,
-                                   particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+                                   particle;
+                                   search_radius=particle_radius) do particle, neighbor,
+                                                                     pos_diff, distance
             # Do not merge a particle that was deleted
             delete_candidates[particle] && return
             delete_candidates[neighbor] && return
@@ -75,9 +77,11 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
             distance >= (h_a + h_b) / 2 && return
 
             # Do not merge particles if m_a + m_b >= max(m_max_a, m_max_b)
-            m_merge = hydrodynamic_mass(system, particle) + hydrodynamic_mass(system, neighbor)
+            m_merge = hydrodynamic_mass(system, particle) +
+                      hydrodynamic_mass(system, neighbor)
             m_merge >=
-            spacing_ratio * max(reference_mass[particle], reference_mass[neighbor]) && return
+            spacing_ratio * max(reference_mass[particle], reference_mass[neighbor]) &&
+                return
 
             # TrixiParticles.@autoinfiltrate
 

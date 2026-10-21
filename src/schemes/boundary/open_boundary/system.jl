@@ -329,7 +329,7 @@ function update_positions!(system::OpenBoundarySystem, v, u, v_ode, u_ode, semi,
     # This function deactivates particles that move outside the bounding box to prevent
     # simulation crashes.
     # Note that deactivating particles is only possible in combination with a 'SystemBuffer'.
-    deactivate_out_of_bounds_particles!(system, buffer(system), nhs, v, u, semi)
+    deactivate_out_of_bounds_particles!(system, buffer(system), nhs, v_ode, u_ode, semi)
 end
 
 function update_boundary_interpolation!(system::OpenBoundarySystem, v, u, v_ode, u_ode,
@@ -541,11 +541,16 @@ end
     transfer_particle!(system, fluid_system, particle, particle_new,
                        v, u, v_fluid, u_fluid, periodic_box)
 
+    # Ensure the boundary particle retains the uniform boundary mass, not the refined fluid mass
+    set_particle_mass!(system, particle_new, first(system.initial_condition.mass))
+
     # Deactivate particle in interior domain
     deactivate_particle!(fluid_system, particle, v_fluid, u_fluid)
 
     return fluid_system
 end
+
+@inline set_particle_smoothing_length!(system::OpenBoundarySystem, particle, h) = system
 
 @inline function transfer_particle!(system_new, system_old, particle_old, particle_new,
                                     v_new, u_new, v_old, u_old, periodic_box)
@@ -563,6 +568,10 @@ end
     # Transfer mass
     mass = hydrodynamic_mass(system_old, particle_old)
     set_particle_mass!(system_new, particle_new, mass)
+
+    # Transfer smoothing length
+    h = smoothing_length(system_old, particle_old)
+    set_particle_smoothing_length!(system_new, particle_new, h)
 
     nonperiodic_coords = current_coords(u_old, system_old, particle_old)
     particle_coords = PointNeighbors.periodic_coords(nonperiodic_coords, periodic_box)
@@ -648,8 +657,7 @@ end
         dist_free_surface = boundary_zone.zone_width - dist_to_transition
 
         # Width of the free-surface region where shifting is disabled.
-        free_surface_region_width = compact_support(fluid_system, fluid_system)
-        # Width of the ramp region behind the free-surface region where shifting is ramped
+        free_surface_region_width = compact_support(system, system, particle)        # Width of the ramp region behind the free-surface region where shifting is ramped
         # from zero to the unmodified value.
         ramp_width = free_surface_region_width
 
@@ -688,7 +696,7 @@ function interpolate_velocity!(system::OpenBoundarySystem, boundary_zone,
                                v_ode, u_ode, semi)
     (; sample_points, sample_velocity, shepard_coefficient) = boundary_zone.cache
     smoothing_length = initial_smoothing_length(system)
-    smoothing_kernel = system_smoothing_kernel(system)
+    system_smoothing_kernel = system_smoothing_kernel(system)
 
     set_zero!(shepard_coefficient)
     set_zero!(sample_velocity)
@@ -714,7 +722,11 @@ function interpolate_velocity!(system::OpenBoundarySystem, boundary_zone,
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
             rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
             volume_b = m_b / rho_b
-            W_ab = kernel(smoothing_kernel, distance, smoothing_length)
+
+            # Fetch the neighbor's variable smoothing length and calculate the symmetric average
+            h_b = smoothing_length(neighbor_system, neighbor)
+            h_ab = (smoothing_length + h_b) / 2
+            W_ab = kernel(system_smoothing_kernel, distance, h_ab)            
             @inbounds shepard_coefficient[point] += volume_b * W_ab
 
             velocity_neighbor_ = @inbounds current_velocity(v_neighbor, neighbor_system,

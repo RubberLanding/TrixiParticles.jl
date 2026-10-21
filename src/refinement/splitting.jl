@@ -19,6 +19,7 @@ function split_particles!(semi, v_ode, u_ode, _v_ode, _u_ode)
             resize = true
             new_capacity = max(round(Int, 1.25 * current_capacity),
                                required_capacity + buffer.buffer_size)
+            # TrixiParticles.@autoinfiltrate
 
             resize!(system, new_capacity)
         end
@@ -68,6 +69,19 @@ function split_particles!(semi, v_ode, u_ode, _v_ode, _u_ode)
                 v[dim, particle] = 0.0
             end
         end
+    end
+
+    # Reinitialize the searches after we deactivate 
+    # the extra buffer particles
+    reinitialize_neighborhood_searches!(semi, u_ode)
+
+    foreach_system(semi) do system
+        !isa(system, AbstractFluidSystem) && return
+        isnothing(system.particle_refinement) && return
+        (; buffer, particle_refinement) = system
+
+        v = wrap_v(v_ode, system, semi)
+        u = wrap_u(u_ode, system, semi)
 
         apply_splitting!(system, particle_refinement, v, u, semi)
 
@@ -89,7 +103,8 @@ end
     (; splitting_pattern) = refinement
     (; epsilon) = splitting_pattern
     (; reference_mass, split_candidates, delete_candidates) = system.cache
-    smoothing_length_ratio = initial_smoothing_length(system) / system.initial_condition.particle_spacing
+    smoothing_length_ratio = initial_smoothing_length(system) /
+                             system.initial_condition.particle_spacing
 
     split_candidates .= false
     @threaded semi for particle in eachparticle(system)
@@ -106,24 +121,28 @@ end
     # Loop over the neighboring systems to avoid race condition
     # when writing `split_candidates`
     foreach_system(semi) do neighbor_system
-        !isa(neighbor_system, Union{AbstractBoundarySystem, AbstractStructureSystem}) && return
-            
+        !isa(neighbor_system, Union{AbstractBoundarySystem, AbstractStructureSystem}) &&
+            return
+
         neighbor_system_spacing = neighbor_system.initial_condition.particle_spacing
-        
+
         u_neighbor = wrap_u(u_ode, neighbor_system, semi)
         neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
         neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
-        
+
         @threaded semi for particle in eachparticle(system)
             !split_candidates[particle] && return
-            
-            split_radius = epsilon * smoothing_length_ratio * particle_spacing(system, particle)
+
+            split_radius = epsilon * smoothing_length_ratio *
+                           particle_spacing(system, particle)
             min_distance = split_radius + 0.5 * neighbor_system_spacing
-            particle_radius = compact_support(system, system, particle) 
-            
+            particle_radius = compact_support(system, system, particle)
+
             @inbounds foreach_neighbor(system_coords, neighbor_coords,
                                        neighborhood_search, backend,
-                                       particle; search_radius=particle_radius) do particle, neighbor, _, distance
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         _, distance
                 if distance < min_distance
                     split_candidates[particle] = false
                 end

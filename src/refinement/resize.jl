@@ -5,7 +5,6 @@ function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
 
     # Resize the neighborhood searches in the Semidiscretization
     resize_semi!(semi)
-    reinitialize_neighborhood_searches!(semi, u_ode)
 
     return semi
 end
@@ -243,20 +242,20 @@ function reinitialize_neighborhood_search!(semi, system::TotalLagrangianSPHSyste
     return semi
 end
 
-# Quick fix for setting `eachpoint` for the TrivialNHS with Taylor Greene
-function update_nhs(semi, system, neighbor)
-    (; neighborhood_searches) = semi
+# # Quick fix for setting `eachpoint` for the TrivialNHS with Taylor Greene
+# function update_nhs(semi, system, neighbor)
+#     (; neighborhood_searches) = semi
 
-    system_index = TrixiParticles.system_indices(system, semi)
-    neighbor_index = TrixiParticles.system_indices(neighbor, semi)
+#     system_index = TrixiParticles.system_indices(system, semi)
+#     neighbor_index = TrixiParticles.system_indices(neighbor, semi)
 
-    nhs = neighborhood_searches[system_index, neighbor_index]
-    n_active_particles = system.buffer.active_particle_count[]
-    neighborhood_searches[system_index,
-                          neighbor_index] = TrixiParticles.copy_neighborhood_search(nhs,
-                                                                                    nhs.search_radius,
-                                                                                    n_active_particles)
-end
+#     nhs = neighborhood_searches[system_index, neighbor_index]
+#     n_active_particles = system.buffer.active_particle_count[]
+#     neighborhood_searches[system_index,
+#                           neighbor_index] = TrixiParticles.copy_neighborhood_search(nhs,
+#                                                                                     nhs.search_radius,
+#                                                                                     n_active_particles)
+# end
 
 function resize_integrator_cache!(integrator, semi, old_ranges_v, old_ranges_u)
     # Collect all history and intermediate caches

@@ -60,7 +60,8 @@ end
                              u_ode, semi) = fluid_system
 
 @inline function spatial_min_spacing!(fluid_system::AbstractFluidSystem,
-                                      neighbor_system::Union{OpenBoundarySystem, WallBoundarySystem,
+                                      neighbor_system::Union{OpenBoundarySystem,
+                                                             WallBoundarySystem,
                                                              AbstractStructureSystem},
                                       v_ode, u_ode, semi)
     (; _particle_spacing, is_boundary_adjacent) = fluid_system.cache
@@ -72,17 +73,19 @@ end
     neighbor_coords = current_coordinates(neighbor_u, neighbor_system)
     neighborhood_search = get_neighborhood_search(fluid_system, neighbor_system, semi)
     backend = semi.parallelization_backend
-    
+
     @threaded semi for fluid_particle in eachparticle(fluid_system)
-        particle_radius = compact_support(fluid_system, fluid_system, fluid_particle) 
+        particle_radius = compact_support(fluid_system, fluid_system, fluid_particle)
         @inbounds foreach_neighbor(fluid_coords, neighbor_coords,
                                    neighborhood_search, backend,
-                                   fluid_particle; search_radius=particle_radius) do fluid_particle, neighbor_particle, _, _
+                                   fluid_particle;
+                                   search_radius=particle_radius) do fluid_particle,
+                                                                     neighbor_particle, _, _
             is_boundary_adjacent[fluid_particle] = true
             _particle_spacing[fluid_particle] = neighbor_system_spacing
         end
     end
-    
+
     return fluid_system
 end
 
@@ -95,7 +98,7 @@ end
     u = wrap_u(u_ode, system, semi)
 
     @threaded semi for particle in eachparticle(system)
-        is_boundary_adjacent[particle] && continue
+        is_boundary_adjacent[particle] && return
         target_spacing = get_target_spacing(system, particle, v, u, semi)
         _particle_spacing[particle] = min(_particle_spacing[particle], target_spacing)
     end

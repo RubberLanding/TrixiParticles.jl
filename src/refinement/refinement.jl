@@ -180,19 +180,21 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
     ELTYPE = eltype(u)
     inv_ndims = one(ELTYPE) / ndims(system)
 
-    neighborhood_search = get_neighborhood_search(system, semi) 
+    neighborhood_search = get_neighborhood_search(system, semi)
     backend = semi.parallelization_backend
 
     @threaded semi for particle in eachparticle(system)
-        particle_radius = compact_support(system, system, particle) 
+        particle_radius = compact_support(system, system, particle)
         @inbounds foreach_neighbor(system_coords, system_coords,
                                    neighborhood_search, backend,
-                                   particle; search_radius=particle_radius) do particle, neighbor, _, _
+                                   particle;
+                                   search_radius=particle_radius) do particle, neighbor, _,
+                                                                     _
             neighbor_mass[particle] += hydrodynamic_mass(system, neighbor)
             neighbor_count[particle] += 1
         end
     end
-    
+
     # Update the smoothing length with the average neighborhood mass (Eq. 35)
     @threaded semi for particle in eachparticle(system)
         neighbor_count[particle] == 0 && return

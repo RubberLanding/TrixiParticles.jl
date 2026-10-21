@@ -52,7 +52,7 @@ end
     spacing_max = zero(eltype(system))
     spacing_avg = zero(eltype(system))
     counter_neighbors = 0
-    particle_radius = compact_support(system, system, particle) 
+    particle_radius = compact_support(system, system, particle)
 
     foreach_system(semi) do neighbor_system
         neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
@@ -65,8 +65,10 @@ end
         if neighbor_system isa AbstractFluidSystem &&
            !isnothing(neighbor_system.particle_refinement)
             @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                    neighborhood_search, backend,
-                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
+                                       neighborhood_search, backend,
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         pos_diff, distance
                 neighbor_spacing = _particle_spacing[neighbor]
                 spacing_min = min(spacing_min, neighbor_spacing)
                 spacing_max = max(spacing_max, neighbor_spacing)
@@ -75,9 +77,11 @@ end
             end
         else
             @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                    neighborhood_search, backend,
-                                    particle; search_radius=particle_radius) do particle, neighbor, pos_diff, distance
-                                                         distance
+                                       neighborhood_search, backend,
+                                       particle;
+                                       search_radius=particle_radius) do particle, neighbor,
+                                                                         pos_diff, distance
+                distance
                 # TODO: This is a constant for most systems and can be moved 
                 # out of the loop
                 neighbor_spacing = particle_spacing(neighbor_system, neighbor)
