@@ -25,14 +25,11 @@ function interact!(dv, v_particle_system, u_particle_system,
 
     # Loop over all pairs of particles and neighbors within the kernel cutoff
     @threaded semi for particle in each_integrated_particle(particle_system)
-        particle_radius = compact_support(particle_system, neighbor_system, particle)
-
-        @inbounds foreach_neighbor(system_coords, neighbor_system_coords,
-                                   neighborhood_search, backend,
-                                   particle; search_radius=particle_radius) do particle,
-                                                                               neighbor,
-                                                                               pos_diff,
-                                                                               distance        
+        @inbounds foreach_symmetric_neighbor(particle_system, neighbor_system,
+                                             system_coords, neighbor_system_coords,
+                                             neighborhood_search, backend,
+                                             particle) do particle, neighbor,
+                                                          pos_diff, distance
             # Skip neighbors with the same position because the kernel gradient is zero.
             # Note that `return` only exits the closure, i.e., skips the current neighbor.
             skip_zero_distance(particle_system) && distance < almostzero && return

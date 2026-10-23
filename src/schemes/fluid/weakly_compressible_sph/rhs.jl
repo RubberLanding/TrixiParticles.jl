@@ -45,10 +45,11 @@ function interact!(dv, v_particle_system, u_particle_system,
         drho_particle = Ref(zero(rho_a))
 
         # Loop over all neighbors within the kernel cutoff
-        @inbounds foreach_neighbor(system_coords, neighbor_system_coords,
-                                   neighborhood_search, backend,
-                                   particle) do particle, neighbor, pos_diff, distance
-            # Skip neighbors with the same position because the kernel gradient is zero.
+        # Loop over all neighbors within the kernel cutoff
+        @inbounds foreach_symmetric_neighbor(particle_system, neighbor_system,
+                                             system_coords, neighbor_system_coords,
+                                             neighborhood_search, backend,
+                                             particle) do particle, neighbor, pos_diff, distance            # Skip neighbors with the same position because the kernel gradient is zero.
             # Note that `return` only exits the closure, i.e., skips the current neighbor.
             skip_zero_distance(particle_system) && distance < almostzero && return
 

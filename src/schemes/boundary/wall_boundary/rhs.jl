@@ -88,8 +88,10 @@ function interact!(dv, v_particle_system, u_particle_system,
     almostzero = sqrt(eps(h_w^2))
 
     # Loop over all pairs of particles and neighbors within the kernel cutoff.
-    foreach_point_neighbor(particle_system, neighbor_system, system_coords, neighbor_coords,
-                           semi) do particle, neighbor, pos_diff, distance
+    foreach_symmetric_point_neighbor(neighbor_system, system, neighbor_coords, system_coords, semi;
+                                     points=each_integrated_particle(neighbor_system),
+                                     parallelization_backend=SerialBackend()) do neighbor, particle,
+                                                                                 pos_diff, distance
 
         # Guard against zero distance
         skip_zero_distance(particle_system) && distance < almostzero && return

@@ -661,3 +661,63 @@ function update!(neighborhood_search, x, y, semi; points_moving=(true, true),
     PointNeighbors.update!(neighborhood_search, x, y; points_moving, eachindex_y,
                            parallelization_backend=semi.parallelization_backend)
 end
+
+# === Symmetric Neighborhood Search Wrappers for Refinement ===
+@inline function foreach_symmetric_point_neighbor(f, system::AbstractSystem,
+                                                  neighbor_system::AbstractSystem,
+                                                  system_coords, neighbor_coords, semi;
+                                                  points=eachparticle(system),
+                                                  parallelization_backend=semi.parallelization_backend)
+    neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
+
+    @threaded parallelization_backend for point in points
+        @inbounds foreach_symmetric_neighbor(f, system, neighbor_system,
+                                             system_coords, neighbor_coords,
+                                             neighborhood_search, parallelization_backend, point)
+    end
+end
+
+@inline function foreach_symmetric_neighbor(f::F, system, neighbor_system,
+                                            system_coords, neighbor_coords,
+                                            neighborhood_search, args...;
+                                            kwargs...) where {F}
+    ref1 = get_refinement(system)
+    ref2 = get_refinement(neighbor_system)
+    foreach_symmetric_neighbor_dispatch(f, ref1, ref2, system, neighbor_system,
+                                        system_coords, neighbor_coords,
+                                        neighborhood_search, args...; kwargs...)
+end
+
+@inline function foreach_symmetric_neighbor_dispatch(f::F, ::Nothing, ::Nothing,
+                                                     system, neighbor_system,
+                                                     system_coords, neighbor_coords,
+                                                     neighborhood_search, args...;
+                                                     kwargs...) where {F}
+    foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search, args...; kwargs...)
+end
+
+@inline function foreach_symmetric_neighbor_dispatch(f::F, ref1, ref2,
+                                                     system, neighbor_system,
+                                                     system_coords, neighbor_coords,
+                                                     neighborhood_search, args...;
+                                                     kwargs...) where {F}
+    kernel = system_smoothing_kernel(system)
+
+    culling_closure = @inline function(particle, neighbor, pos_diff, distance)
+        h_a = smoothing_length(system, particle)
+        h_b = smoothing_length(neighbor_system, neighbor)
+        h_ab = 0.5 * (h_a + h_b)
+
+        R_ab = compact_support(kernel, h_ab)
+
+        # Reject asymmetric interactions outside blended compact support
+        if distance > R_ab
+            return nothing
+        end
+
+        f(particle, neighbor, pos_diff, distance)
+    end
+
+    foreach_neighbor(culling_closure, system_coords, neighbor_coords,
+                     neighborhood_search, args...; kwargs...)
+end

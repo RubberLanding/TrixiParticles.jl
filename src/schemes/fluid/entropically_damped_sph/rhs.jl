@@ -22,12 +22,12 @@ function interact!(dv, v_particle_system, u_particle_system,
     almostzero = sqrt(eps(h^2))
 
     # Loop over all pairs of particles and neighbors within the kernel cutoff
-    foreach_point_neighbor(particle_system, neighbor_system,
-                           system_coords, neighbor_coords, semi;
-                           points=each_integrated_particle(particle_system)) do particle,
-                                                                                neighbor,
-                                                                                pos_diff,
-                                                                                distance
+    foreach_symmetric_point_neighbor(particle_system, neighbor_system,
+                                     system_coords, neighbor_coords, semi;
+                                     points=each_integrated_particle(particle_system)) do particle,
+                                                                                          neighbor,
+                                                                                          pos_diff,
+                                                                                          distance
         # Skip neighbors with the same position because the kernel gradient is zero.
         # Note that `return` only exits the closure, i.e., skips the current neighbor.
         skip_zero_distance(particle_system) && distance < almostzero && return
