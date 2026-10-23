@@ -135,7 +135,7 @@ end
 
             split_radius = epsilon * smoothing_length_ratio *
                            particle_spacing(system, particle)
-            min_distance = split_radius + 0.5 * neighbor_system_spacing
+            min_distance = split_radius + 0.05 * neighbor_system_spacing
             particle_radius = compact_support(system, system, particle)
 
             @inbounds foreach_neighbor(system_coords, neighbor_coords,

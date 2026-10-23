@@ -66,7 +66,7 @@ end
 
 @inline function set_particle_smoothing_length!(system::AbstractFluidSystem, ::Nothing,
                                                 particle, particle_smoothing_length)
-    throw(ArgumentError("Cannot set per-particle smoothing length when particle refinement is disabled."))
+    nothing
 end
 
 function create_cache_density(initial_condition, ::SummationDensity)

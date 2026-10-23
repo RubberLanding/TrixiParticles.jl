@@ -10,37 +10,121 @@ end
                          kwargs...) = system
 
 @inline function shift_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
-                                  semi; iter=3)
+                                  semi; max_iter=40, tol=2e-3)
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
-
-    # u_ode_initial = copy(u_ode)
-    # v_ode_initial = copy(v_ode)
+    
+    # Store initial unshifted positions for the Taylor expansion
     u_initial = copy(u)
+    
+    for i in 1:max_iter
+        compute_shifting_sun2017!(system, refinement, v, u, v_ode, u_ode, semi)
+        
+        # Apply shift with a strict conservative limiter (e.g., max 1% of h per iteration)
+        # Ensure apply_shift! is modified to return the maximum displacement scalar applied
+        max_relative_shift = apply_shift!(u, u_ode, system, semi; baseline_theta=0.01, theta_ratio=0.05)
+        @show max_relative_shift i 
 
-    # TrixiParticles.@autoinfiltrate    
-
-    for i in 1:iter
-        # Calculate the shift
-        compute_shifting_haftu!(system, refinement, v, u, v_ode, u_ode, semi)
-        # compute_shifting_adapted!(system, refinement, v, u, v_ode, u_ode, semi)
-
-        # TrixiParticles.@autoinfiltrate 
-
-        # Apply the shifting
-        apply_shift!(u, u_ode, system, semi; theta=0.1, use_dynamic_theta=true,
-                     theta_ratio=0.25)
-
-        # TrixiParticles.@autoinfiltrate 
+        # Break if the largest particle shift anywhere in the domain drops below 0.1% of its local h
+        if max_relative_shift < tol # tol = 1e-3  
+            @show i          
+            break
+        end
     end
 
-    # TrixiParticles.@autoinfiltrate 
+    TrixiParticles.@autoinfiltrate
 
+    # Correct properties using the total displacement across all iterations
     compute_gradient_haftu!(system, refinement, v, u, v_ode, u_ode, semi)
-    # compute_gradient_adapted!(system, refinement, v, u, v_ode, u_ode, semi)
 
-    # Apply property corrections once using the total displacement
+    TrixiParticles.@autoinfiltrate
+
     apply_property_corrections!(v, u, u_initial, system, semi)
+
+    # Update smoothing lengths based on the newly relaxed configuration
+    update_smoothing_lengths!(system, v_ode, u_ode, semi)
+
+    TrixiParticles.@autoinfiltrate
+
+    return system
+end
+
+
+
+@fastpow function compute_shifting_sun2017!(system, refinement, v, u, v_ode, u_ode, semi)
+    (; cache, smoothing_kernel) = system
+    (; delta_v) = cache
+    NDIMS = ndims(system)
+
+    set_zero!(delta_v)
+
+    foreach_system(semi) do neighbor_system
+        u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+        v_neighbor = wrap_v(v_ode, neighbor_system, semi)
+
+        system_coords = current_coordinates(u, system)
+        neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
+        neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
+        backend = semi.parallelization_backend
+
+        @threaded semi for particle in eachparticle(system)
+            @inbounds foreach_symmetric_neighbor(system, neighbor_system,
+                                                 system_coords, neighbor_coords,
+                                                 neighborhood_search, backend,
+                                                 particle) do particle, neighbor,
+                                                              pos_diff, distance                
+                # m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
+                # # rho_a = @inbounds current_density(v, system, particle)
+                # # rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
+                # rho_constant = 2.0 * refinement.reference_density
+
+                # h_a = smoothing_length(system, particle)
+                # h_b = smoothing_length(neighbor_system, neighbor)
+                # h_ab = 0.5 * (h_a + h_b)
+
+                # # Use dynamic local target spacing
+                # dx_local = particle_spacing(system, refinement, particle)
+
+                # # Symmetrized Fickian Kernel Evaluation
+                # kernel_weight = kernel(smoothing_kernel, distance, h_ab)
+                # Wdx = kernel(smoothing_kernel, dx_local, h_ab)
+                # grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h_ab)
+
+                # # Sun 2017 geometric Fickian shift (adapted for discrete relaxation)
+                # delta_r_ = -h_ab^2 * (1 + (kernel_weight / Wdx)^4 * 2 / 10) * m_b / (rho_constant) * grad_kernel
+
+                m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
+
+                h_a = smoothing_length(system, particle)
+                h_b = smoothing_length(neighbor_system, neighbor)
+                h_ab = 0.5 * (h_a + h_b)
+
+                # Calculate the ideal symmetric spacing directly from the blended smoothing length
+                dx_ab = h_ab / refinement.smoothing_length_factor
+
+                effective_distance = max(distance, 0.15 * h_ab)
+                direction = distance > 1e-7 ? (pos_diff / distance) : zero(pos_diff)
+                fake_pos_diff = direction * effective_distance
+
+                kernel_weight = kernel(smoothing_kernel, distance, h_ab)
+                Wdx = kernel(smoothing_kernel, dx_ab, h_ab) # Now dimensionally consistent!
+                grad_kernel_safe = kernel_grad(smoothing_kernel, fake_pos_diff, effective_distance, h_ab)
+
+                # 3. Stable Constant Density
+                # Prevents the Fickian shift from relying on the static cached summation density
+                rho_constant = 2.0 * refinement.reference_density
+
+                # Increased the repulsion coefficient to 0.5 to physically blast the strings apart
+                delta_r_ = -h_ab^2 * (1 + (kernel_weight / Wdx)^4 * 0.5) * m_b / rho_constant * grad_kernel_safe
+                for i in eachindex(delta_r_)
+                    idx = linear_index_vector(i, particle, NDIMS)
+                    @inbounds delta_v[idx] += delta_r_[i]
+                end
+            end
+        end
+    end
+
+    modify_shifting_at_free_surfaces!(system, u, semi)
 
     return system
 end
@@ -67,13 +151,11 @@ end
         backend = semi.parallelization_backend
 
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle)
-
-            @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                       neighborhood_search, backend,
-                                       particle;
-                                       search_radius=particle_radius) do particle, neighbor,
-                                                                         pos_diff, distance
+            @inbounds foreach_symmetric_neighbor(system, neighbor_system,
+                                                 system_coords, neighbor_coords,
+                                                 neighborhood_search, backend,
+                                                 particle) do particle, neighbor,
+                                                              pos_diff, distance                
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 rho_a = @inbounds current_density(v, system, particle)
                 rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -127,13 +209,11 @@ end
         backend = semi.parallelization_backend
 
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle)
-
-            @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                       neighborhood_search, backend,
-                                       particle;
-                                       search_radius=particle_radius) do particle, neighbor,
-                                                                         pos_diff, distance
+            @inbounds foreach_symmetric_neighbor(system, neighbor_system,
+                                                 system_coords, neighbor_coords,
+                                                 neighborhood_search, backend,
+                                                 particle) do particle, neighbor,
+                                                              pos_diff, distance                
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
                 h_a = smoothing_length(system, particle)
@@ -193,13 +273,11 @@ end
         backend = semi.parallelization_backend
 
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle)
-
-            @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                       neighborhood_search, backend,
-                                       particle;
-                                       search_radius=particle_radius) do particle, neighbor,
-                                                                         pos_diff, distance
+            @inbounds foreach_symmetric_neighbor(system, neighbor_system,
+                                                 system_coords, neighbor_coords,
+                                                 neighborhood_search, backend,
+                                                 particle) do particle, neighbor,
+                                                              pos_diff, distance                
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 rho_a = @inbounds current_density(v, system, particle)
                 rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -265,13 +343,11 @@ end
         neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
         backend = semi.parallelization_backend
         @threaded semi for particle in eachparticle(system)
-            particle_radius = compact_support(system, system, particle)
-
-            @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                       neighborhood_search, backend,
-                                       particle;
-                                       search_radius=particle_radius) do particle, neighbor,
-                                                                         pos_diff, distance
+            @inbounds foreach_symmetric_neighbor(system, neighbor_system,
+                                                 system_coords, neighbor_coords,
+                                                 neighborhood_search, backend,
+                                                 particle) do particle, neighbor,
+                                                              pos_diff, distance                
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
                 h_a = smoothing_length(system, particle)
@@ -337,33 +413,50 @@ end
     return shift_norm > r_allowed ? (r_allowed / shift_norm) : 1.0
 end
 
-function apply_shift!(u_system, u_ode, system, semi; theta, use_dynamic_theta, theta_ratio)
+function apply_shift!(u_system, u_ode, system, semi; baseline_theta=0.05, theta_ratio=0.01)
     (; delta_v) = system.cache
     NDIMS = ndims(system)
+    ELTYPE = eltype(u_system)
 
-    if use_dynamic_theta
-        @threaded semi for particle in eachparticle(system)
-            theta = dynamic_theta(particle, u_system, delta_v, system, NDIMS; theta_ratio)
-            for i in 1:NDIMS
-                idx = linear_index_vector(i, particle, NDIMS)
-                @inbounds u_system[i, particle] += theta * delta_v[idx]
-            end
+    # Track individual shifts to safely find the maximum across all threads.
+    # TODO: For zero-allocation performance, can add `applied_shifts` to create_cache_refinement
+    applied_shifts = zeros(ELTYPE, nparticles(system))
+
+    @threaded semi for particle in eachparticle(system)
+        # 1. Calculate the raw unscaled shift magnitude from the delta_v buffer
+        shift_norm = zero(ELTYPE)
+        for i in 1:NDIMS
+            idx = linear_index_vector(i, particle, NDIMS)
+            @inbounds shift_norm += delta_v[idx]^2
         end
-    else
-        @threaded semi for particle in eachparticle(system)
-            for i in 1:NDIMS
-                idx = linear_index_vector(i, particle, NDIMS)
-                @inbounds u_system[i, particle] += theta * delta_v[idx]
-            end
+        shift_norm = sqrt(shift_norm)
+
+    h_i = smoothing_length(system, particle)
+
+    proposed_shift = baseline_theta * shift_norm
+    r_allowed = theta_ratio * h_i
+    theta = proposed_shift > r_allowed ? (r_allowed / shift_norm) : baseline_theta
+    
+    # Track the shift strictly as a percentage of the particle's own size
+    @inbounds applied_shifts[particle] = (theta * shift_norm) / h_i
+
+        # 3. Apply the constrained shift to the coordinates
+        for i in 1:NDIMS
+            idx = linear_index_vector(i, particle, NDIMS)
+            @inbounds u_system[i, particle] += theta * delta_v[idx]
         end
     end
 
+    # 4. Critical: Update the neighborhood search for the newly shifted positions.
+    # Without this, the next iteration of the relaxation loop will use stale neighbor lists.
     foreach_system(semi) do neighbor
         u_neighbor = wrap_u(u_ode, neighbor, semi)
         neighborhood_search = get_neighborhood_search(system, neighbor, semi)
-
         update_nhs!(neighborhood_search, system, neighbor, u_system, u_neighbor, semi)
     end
+
+    # Return the largest displacement applied across the entire domain for the while-loop tolerance check
+    return maximum(applied_shifts)
 end
 
 function apply_property_corrections!(v, u, u_initial, system, semi)
