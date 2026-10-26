@@ -455,6 +455,13 @@ end
 
 @fastpow function update_shifting_inner!(system, shifting::ParticleShiftingTechnique,
                                          v, u, v_ode, u_ode, semi)
+    refinement = get_refinement(system)
+
+    update_shifting_inner!(refinement, system, shifting, v, u, v_ode, u_ode, semi)
+end
+
+@fastpow function update_shifting_inner!(::Nothing, system, shifting::ParticleShiftingTechnique,
+                                         v, u, v_ode, u_ode, semi)
     (; cache) = system
     (; delta_v) = cache
 
@@ -504,6 +511,60 @@ end
                        m_b / (rho_a + rho_b) * grad_kernel
 
             # Write into the buffer
+            for i in eachindex(delta_v_)
+                idx = linear_index_vector(i, particle, NDIMS)
+                @inbounds cache.delta_v[idx] += delta_v_[i]
+            end
+        end
+    end
+
+    modify_shifting_at_free_surfaces!(system, u, semi)
+
+    return system
+end
+
+@fastpow function update_shifting_inner!(refinement, system, shifting::ParticleShiftingTechnique,
+                                         v, u, v_ode, u_ode, semi)
+    (; cache, smoothing_kernel) = system
+    (; delta_v) = cache
+
+    set_zero!(delta_v)
+
+    NDIMS = ndims(system)
+    v_max_ = v_max(shifting, v, system)
+
+    foreach_system(semi) do neighbor_system
+        u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+        v_neighbor = wrap_v(v_ode, neighbor_system, semi)
+
+        system_coords = current_coordinates(u, system)
+        neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
+
+        # Multi-resolution formulation for systems with refinement
+        foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords,
+                               semi;
+                               points=each_integrated_particle(system)) do particle,
+                                                                           neighbor,
+                                                                           pos_diff,
+                                                                           distance
+            m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
+            rho_a = @inbounds current_density(v, system, particle)
+            rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
+
+            h_a = smoothing_length(system, particle)
+            h_b = smoothing_length(neighbor_system, neighbor)
+            dx_a = particle_spacing(system, particle)
+
+            # Calculate averaged smoothing length per Haftu et al.
+            h_ab = (h_a + h_b) / 2
+
+            kernel_weight = kernel(smoothing_kernel, distance, h_ab)
+            Wdx = kernel(smoothing_kernel, dx_a, h_ab)
+            grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h_ab)
+
+            delta_v_ = -v_max_ * (2 * h_a)^2 / (2 * dx_a) * (1 + (kernel_weight / Wdx)^4 * 2 / 10) *
+                    m_b / (rho_a + rho_b) * grad_kernel
+
             for i in eachindex(delta_v_)
                 idx = linear_index_vector(i, particle, NDIMS)
                 @inbounds cache.delta_v[idx] += delta_v_[i]

@@ -64,6 +64,7 @@ nu = U * box_length / reynolds_number
 
 background_pressure = sound_speed^2 * fluid_density
 shifting_technique = ConsistentShiftingSun2019(; sound_speed_factor=0.1)
+# shifting_technique = nothing
 
 smoothing_length_factor = 1.0
 smoothing_length = smoothing_length_factor * particle_spacing
@@ -147,7 +148,7 @@ function apply_refinement!(integrator)
     system = semi.systems[1]
     length_u_before = length(u_ode)
 
-    integrator.stats.naccept > 3 && TrixiParticles.@autoinfiltrate    
+    # integrator.stats.naccept > 3 && TrixiParticles.@autoinfiltrate    
 
     TrixiParticles.reset_refinement!(system,
                                      semi)
