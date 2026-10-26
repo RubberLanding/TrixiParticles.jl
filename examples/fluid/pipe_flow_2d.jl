@@ -65,7 +65,7 @@ n_buffer_particles = 10 * pipe.n_particles_per_dimension[2]^(NDIMS - 1)
 
 # ==========================================================================================
 # ==== Fluid
-wcsph = true
+wcsph = false
 
 smoothing_length = 1.5 * particle_spacing
 smoothing_kernel = WendlandC2Kernel{NDIMS}()
@@ -124,7 +124,7 @@ inflow = BoundaryZone(; boundary_face=face_in, face_normal=flow_direction,
                       initial_condition=inlet.fluid, boundary_type=boundary_type_in)
 
 reference_velocity_out = nothing
-reference_pressure_out = nothing
+reference_pressure_out = 0.0
 reference_density_out = nothing
 boundary_type_out = OutFlow()
 face_out = ([min_coords_outlet[1], 0.0], [min_coords_outlet[1], domain_size[2]])
@@ -165,7 +165,7 @@ semi = Semidiscretization(fluid_system, open_boundary, boundary_system,
 ode = semidiscretize(semi, tspan)
 
 info_callback = InfoCallback(interval=100)
-saving_callback = SolutionSavingCallback(dt=0.02, prefix="")
+saving_callback = SolutionSavingCallback(dt=0.002, prefix="")
 
 extra_callback = nothing
 

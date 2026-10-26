@@ -251,14 +251,8 @@ function apply_refinement!(integrator)
 
     TrixiParticles.shift_particles!(system,
                                     v_ode, u_ode,
-                                    semi, iter=100)
-
+                                    semi)
     # TrixiParticles.@autoinfiltrate
-
-    TrixiParticles.update_smoothing_lengths!(system,
-                                             v_ode,
-                                             u_ode,
-                                             semi)
 
     # Update the neighborhoodsearches of all systems
     TrixiParticles.update_nhs!(semi, u_ode)
@@ -270,15 +264,12 @@ function apply_refinement!(integrator)
     end
 
     derivative_discontinuity!(integrator, true)
-
-    TrixiParticles.@autoinfiltrate    
 end
 
-refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept == 1,
+refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept % 10 == 0,
                                        apply_refinement!, save_positions=(false, false))
 
-callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback,
-                        refinement_callback)
+callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback, refinement_callback)
 
 sol = solve(ode, RDPK3SpFSAL35(),
             abstol=1e-5, # Default abstol is 1e-6 (may need to be tuned to prevent boundary penetration)

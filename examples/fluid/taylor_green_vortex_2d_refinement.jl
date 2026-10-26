@@ -17,7 +17,9 @@ using OrdinaryDiffEqLowStorageRK
 
 # ==========================================================================================
 # ==== Resolution
-particle_spacing = 0.05
+particle_spacing = 0.025
+min_spacing = particle_spacing / 2
+max_spacing = particle_spacing
 
 # ==========================================================================================
 # ==== Experiment Setup
@@ -63,7 +65,8 @@ nu = U * box_length / reynolds_number
 background_pressure = sound_speed^2 * fluid_density
 shifting_technique = ConsistentShiftingSun2019(; sound_speed_factor=0.1)
 
-smoothing_length = 1.2 * particle_spacing
+smoothing_length_factor = 1.0
+smoothing_length = smoothing_length_factor * particle_spacing
 smoothing_kernel = SchoenbergQuinticSplineKernel{2}()
 
 # To be set via `trixi_include`
@@ -77,55 +80,54 @@ fluid = RectangularShape(particle_spacing, (n_particles_xy, n_particles_xy), (0.
 refine = true
 n_particles = TrixiParticles.nparticles(fluid)
 
-x_min = 0.35
-x_max = 0.65
-y_min = 0.35
-y_max = 0.65
 box_logic = (system, particle, v, u,
              semi) -> begin
+    x_min = 0.35
+    x_max = 0.65
+    y_min = 0.35
+    y_max = 0.65
+
     pos = TrixiParticles.current_coords(u, system, particle)
-    return (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
+    if (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
+        return min_spacing
+    else 
+        return max_spacing
+    end 
 end
 
 box_criterion = SolutionRefinementCriterion(box_logic)
 refinement_criteria = (box_criterion,)
 
 refinement = ParticleRefinement(; spacing_ratio=1.05,
-                                min_spacing=particle_spacing / 1.5,
+                                smoothing_length_factor,
+                                min_spacing, max_spacing,
                                 reference_density=fluid_density,
                                 refinement_criteria)
 n_childs = TrixiParticles.nchilds(refinement.splitting_pattern)
 
-# n_buffer_particles = ceil(Int32,
-#                         12 * n_childs * (x_max - x_min) *
-#                         (y_max - y_min) / particle_spacing^2)
-n_buffer_particles = 1000
+n_buffer_particles = 5000
 
 viscosity = ViscosityAdami(; nu)
 density_calculator = SummationDensity()
 correction = nothing
 
-fluid_system = refine ?
-               EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
-                                           sound_speed,
-                                           density_calculator,
-                                           viscosity,
-                                           shifting_technique,
-                                           particle_refinement=refinement,
-                                           buffer_size=n_buffer_particles) :
-               EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
-                                           sound_speed,
-                                           density_calculator,
-                                           viscosity,
-                                           pressure_acceleration=nothing,
-                                           shifting_technique,
-                                           buffer_size=n_buffer_particles)
-
+fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                            sound_speed,
+                            density_calculator,
+                            viscosity,
+                            shifting_technique,
+                            particle_refinement=refinement,
+                            buffer_size=n_buffer_particles)
 # ==========================================================================================
 # ==== Simulation
-periodic_box = PeriodicBox(min_corner=[0.0, 0.0], max_corner=[box_length, box_length])
+min_corner=[0.0, 0.0]
+max_corner=[box_length, box_length]
+periodic_box = PeriodicBox(; min_corner, max_corner)
+nhs = GridNeighborhoodSearch{NDIMS}(; cell_list=FullGridCellList(; min_corner, max_corner),
+                                    update_strategy=ParallelUpdate(), periodic_box)
+
 semi = Semidiscretization(fluid_system,
-                          neighborhood_search=TrivialNeighborhoodSearch{2}(; periodic_box))
+                          neighborhood_search=nhs)
 # TrixiParticles.@autoinfiltrate
 
 ode = semidiscretize(semi, tspan)
@@ -136,16 +138,16 @@ saving_callback = SolutionSavingCallback(interval=1)
 
 pp_callback = nothing
 
-refinement_callback = nothing
 v_tmp = similar(ode.u0.x[1])
 u_tmp = similar(ode.u0.x[2])
-
 function apply_refinement!(integrator)
     v_ode = integrator.u.x[1]
     u_ode = integrator.u.x[2]
     semi = integrator.p.semi
     system = semi.systems[1]
     length_u_before = length(u_ode)
+
+    integrator.stats.naccept > 3 && TrixiParticles.@autoinfiltrate    
 
     TrixiParticles.reset_refinement!(system,
                                      semi)
@@ -155,6 +157,7 @@ function apply_refinement!(integrator)
                                                                  semi)
     u = TrixiParticles.wrap_u(u_ode, system,
                               semi)
+
     TrixiParticles.update_nhs!(neighborhood_search,
                                system,
                                system, u, u,
@@ -173,74 +176,32 @@ function apply_refinement!(integrator)
     TrixiParticles.split_particles!(semi, v_ode,
                                     u_ode, v_tmp,
                                     u_tmp)
-    TrixiParticles.compact_system!(system, v_ode,
-                                   u_ode, semi)
-    TrixiParticles.update_nhs!(semi, u_ode)
 
     TrixiParticles.merge_particles!(system,
                                     v_ode, u_ode,
                                     semi)
-    TrixiParticles.compact_system!(system, v_ode,
-                                   u_ode, semi)
-    TrixiParticles.update_nhs!(semi, u_ode)
 
     TrixiParticles.shift_particles!(system,
                                     v_ode, u_ode,
-                                    semi,
-                                    integrator.dt, 1.0, 5)
+                                    semi)
+    # TrixiParticles.@autoinfiltrate
 
-    TrixiParticles.update_smoothing_lengths!(system,
-                                             v_ode,
-                                             u_ode,
-                                             semi)
+    # Update the neighborhoodsearches of all systems
+    TrixiParticles.update_nhs!(semi, u_ode)
 
     if length(u_ode) > length_u_before
         resize!(integrator,
                 (length(v_ode), length(u_ode)))
-        TrixiParticles.@autoinfiltrate
+        # TrixiParticles.@autoinfiltrate
     end
 
     derivative_discontinuity!(integrator, true)
+
+    # integrator.stats.naccept > 5 && TrixiParticles.@autoinfiltrate    
 end
 
-refinement_callback = refine ?
-                      DiscreteCallback((u, t,
-                                        integrator) -> integrator.stats.naccept == 5,
-                                       apply_refinement!, save_positions=(false, false)) :
-                      nothing
-
-save_interval = 0.05
-next_save_time = [0.0]
-frame_counter = [0] # Integer frame counter
-vtk_callback = DiscreteCallback((u, t, integrator) -> t >= next_save_time[1],
-                                (integrator) -> begin
-                                    (; t) = integrator
-                                    v_ode = integrator.u.x[1]
-                                    u_ode = integrator.u.x[2]
-                                    semi = integrator.p.semi
-                                    system = semi.systems[1]
-
-                                    interpolation_min = [0.0, 0.0]
-                                    interpolation_max = [box_length, box_length]
-                                    interpolation_spacing = min_spacing / 4
-
-                                    # Put the text before the number for automatic Paraview grouping and pad the counter to 4 digits
-                                    refine_str = refine ? "ref" : "noref"
-                                    frame_str = lpad(frame_counter[1], 4, '0')
-                                    file_name = "taylor_greene_$(refine_str)_$(frame_str)"
-
-                                    TrixiParticles.interpolate_plane_2d_vtk(interpolation_min,
-                                                                            interpolation_max,
-                                                                            interpolation_spacing,
-                                                                            semi, system,
-                                                                            v_ode, u_ode;
-                                                                            filename=file_name)
-
-                                    # Increment both the timer and the frame counter
-                                    next_save_time[1] += save_interval
-                                    frame_counter[1] += 1
-                                end,
-                                save_positions=(false, false))
+refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept % 10 == 0,
+                                       apply_refinement!, save_positions=(false, false))
 
 callbacks = CallbackSet(info_callback, saving_callback, pp_callback, UpdateCallback(),
                         refinement_callback)
@@ -251,3 +212,21 @@ sol = solve(ode, RDPK3SpFSAL49(),
             abstol=1e-8, # Default abstol is 1e-6 (may need to be tuned to prevent boundary penetration)
             reltol=1e-4, # Default reltol is 1e-3 (may need to be tuned to prevent boundary penetration)
             dtmax=dt_max, save_everystep=false, callback=callbacks);
+
+# using Plots
+# function plot_points(system::AbstractFluidSystem, u) 
+#     active_count = system.buffer.active_particle_count[]
+#     masses = system.mass[1:active_count]
+#     marker_sizes = sqrt.(masses ./ maximum(masses)) .* 8.0 
+
+#     p1 = scatter(u[1, 1:active_count], u[2, 1:active_count], 
+#                 markercolor=:blue, markerstrokewidth=0, markersize=marker_sizes, 
+#                 legend=false, aspect_ratio=:equal)
+
+#     plot(p1, size=(1500, 750))
+# end
+
+# function reset_ode!(u_ode_initial, v_ode_initial, u_ode, v_ode)
+#     u_ode .= u_ode_initial
+#     v_ode .= v_ode_initial
+# end
