@@ -75,14 +75,13 @@ end
     backend = semi.parallelization_backend
 
     @threaded semi for fluid_particle in eachparticle(fluid_system)
-        particle_radius = compact_support(fluid_system, fluid_system, fluid_particle)
-        @inbounds foreach_neighbor(fluid_coords, neighbor_coords,
-                                   neighborhood_search, backend,
-                                   fluid_particle;
-                                   search_radius=particle_radius) do fluid_particle,
-                                                                     neighbor_particle, _, _
+        @inbounds foreach_symmetric_neighbor(fluid_system, neighbor_system,
+                                            fluid_coords, neighbor_coords,
+                                            neighborhood_search, backend,
+                                            fluid_particle) do fluid_particle, _, _, _
             is_boundary_adjacent[fluid_particle] = true
-            _particle_spacing[fluid_particle] = neighbor_system_spacing
+            _particle_spacing[fluid_particle] = min(_particle_spacing[fluid_particle],
+                                                    neighbor_system_spacing)
         end
     end
 

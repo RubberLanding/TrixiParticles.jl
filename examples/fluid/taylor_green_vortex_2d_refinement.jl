@@ -109,7 +109,7 @@ n_childs = TrixiParticles.nchilds(refinement.splitting_pattern)
 n_buffer_particles = 5000
 
 viscosity = ViscosityAdami(; nu)
-density_calculator = SummationDensity()
+density_calculator = ContinuityDensity()
 correction = nothing
 
 fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
@@ -124,7 +124,7 @@ fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_le
 min_corner=[0.0, 0.0]
 max_corner=[box_length, box_length]
 periodic_box = PeriodicBox(; min_corner, max_corner)
-nhs = GridNeighborhoodSearch{NDIMS}(; cell_list=FullGridCellList(; min_corner, max_corner),
+nhs = GridNeighborhoodSearch{2}(; cell_list=FullGridCellList(; min_corner, max_corner),
                                     update_strategy=ParallelUpdate(), periodic_box)
 
 semi = Semidiscretization(fluid_system,
@@ -201,8 +201,16 @@ function apply_refinement!(integrator)
     # integrator.stats.naccept > 5 && TrixiParticles.@autoinfiltrate    
 end
 
-refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept % 10 == 0,
-                                       apply_refinement!, save_positions=(false, false))
+last_refined_step = Ref(-1)
+function refinement_condition(u, t, integrator)
+    n = integrator.stats.naccept
+    (n % 10 == 0 && n != last_refined_step[]) || return false
+    last_refined_step[] = n
+    return true
+end
+
+refinement_callback = DiscreteCallback(refinement_condition, apply_refinement!,
+                                       save_positions=(false, false))
 
 callbacks = CallbackSet(info_callback, saving_callback, pp_callback, UpdateCallback(),
                         refinement_callback)

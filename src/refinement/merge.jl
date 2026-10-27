@@ -82,6 +82,9 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
             m_merge >=
             spacing_ratio * max(reference_mass[particle], reference_mass[neighbor]) &&
                 return
+            # m_merge >=
+            # spacing_ratio * min(reference_mass[particle], reference_mass[neighbor]) &&
+            #     return
 
             # TrixiParticles.@autoinfiltrate
 

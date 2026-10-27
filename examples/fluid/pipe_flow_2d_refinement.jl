@@ -75,7 +75,8 @@ smoothing_length_ratio = 1.5
 smoothing_length = smoothing_length_ratio * particle_spacing
 smoothing_kernel = WendlandC2Kernel{NDIMS}()
 
-fluid_density_calculator = SummationDensity()
+# fluid_density_calculator = SummationDensity()
+fluid_density_calculator = ContinuityDensity()
 
 kinematic_viscosity = maximum(prescribed_velocity) * domain_size[2] / reynolds_number
 
@@ -124,6 +125,7 @@ n_buffer_particles += n_buffer_refinement_particles
 
 refinement = ParticleRefinement(; spacing_ratio=1.05,
                                 min_spacing, max_spacing,
+                                smoothing_length_factor=smoothing_length_ratio,
                                 reference_density=fluid_density,
                                 refinement_criteria)
 
@@ -215,7 +217,7 @@ function apply_refinement!(integrator)
     system = semi.systems[1]
     length_u_before = length(u_ode)
 
-    # TrixiParticles.@autoinfiltrate
+    integrator.stats.naccept > 10 && TrixiParticles.@autoinfiltrate
 
     TrixiParticles.reset_refinement!(system,
                                      semi)
@@ -266,8 +268,16 @@ function apply_refinement!(integrator)
     derivative_discontinuity!(integrator, true)
 end
 
-refinement_callback = DiscreteCallback((u, t, integrator) -> integrator.stats.naccept % 10 == 0,
-                                       apply_refinement!, save_positions=(false, false))
+last_refined_step = Ref(-1)
+function refinement_condition(u, t, integrator)
+    n = integrator.stats.naccept
+    (n % 10 == 0 && n != last_refined_step[]) || return false
+    last_refined_step[] = n
+    return true
+end
+
+refinement_callback = DiscreteCallback(refinement_condition, apply_refinement!,
+                                       save_positions=(false, false))
 
 callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback, refinement_callback)
 

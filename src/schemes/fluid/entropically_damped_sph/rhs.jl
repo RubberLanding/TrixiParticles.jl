@@ -251,11 +251,11 @@ end
                                         grad_kernel_a, correction)
 
     # Compute unscaled P_a and P_b for pressure_evolution
-    p_avg_a = average_pressure(particle_system, particle)
-    p_avg_b = average_pressure(neighbor_system, neighbor)
+    p_avg = average_pressure(particle_system, particle)
+    # p_avg_b = average_pressure(neighbor_system, neighbor)
 
-    P_a = (p_a - p_avg_a) / rho_a^2
-    P_b = (p_b - p_avg_b) / rho_b^2
+    P_a = (p_a - p_avg) / rho_a^2
+    P_b = (p_b - p_avg) / rho_b^2
 
     return dv_pressure, P_a, P_b
 end
@@ -268,11 +268,14 @@ end
                                          refinement)
 
     # Compute scaled P_a and P_b (Eq. 8)
-    p_avg_a = average_pressure(particle_system, particle)
-    p_avg_b = average_pressure(neighbor_system, neighbor)
+    # Shift both pressures by the same constant a 
+    # per-particle average-pressure would cancel the pressure gradient.
+    # The source code implements it correctly, the paper not. 
+    p_avg = average_pressure(particle_system, particle)
+    # p_avg_b = average_pressure(neighbor_system, neighbor)
 
-    P_a = (p_a - p_avg_a) / (rho_a^2 * beta_a)
-    P_b = (p_b - p_avg_b) / (rho_b^2 * beta_b)
+    P_a = (p_a - p_avg) / (rho_a^2 * beta_a)
+    P_b = (p_b - p_avg) / (rho_b^2 * beta_b)
 
     # Compute explicit physical pressure
     term_a_pressure = P_a .* grad_kernel_a

@@ -84,43 +84,15 @@ end
     return system.mass[particle]
 end
 
-function smoothing_length(system::AbstractFluidSystem)
-    return system.smoothing_length
-end
-
-function smoothing_length(system::AbstractFluidSystem, particle)
-    return smoothing_length(system, system.particle_refinement, particle)
-end
-
-function smoothing_length(system::AbstractFluidSystem, ::Nothing, particle)
-    return system.smoothing_length
-end
-
-function smoothing_length(system::AbstractFluidSystem, refinement, particle)
-    return system.smoothing_length[particle]
-end
-
 @inline spacing_to_smoothing_length(system::AbstractFluidSystem,
                                     particle_spacing) = system.particle_refinement.smoothing_length_factor *
                                                         particle_spacing
-
-function initial_smoothing_length(system::AbstractFluidSystem)
-    return initial_smoothing_length(system, system.particle_refinement)
-end
-
-initial_smoothing_length(system, ::Nothing) = system.smoothing_length
 
 function initial_smoothing_length(system, refinement)
     # TODO
     return refinement.smoothing_length_factor *
            system.initial_condition.particle_spacing
 end
-
-@inline function particle_spacing(system::AbstractFluidSystem, particle)
-    return particle_spacing(system, system.particle_refinement, particle)
-end
-
-@inline particle_spacing(system, ::Nothing, _) = system.initial_condition.particle_spacing
 
 # Compute the effective particle spacing (Δs = h / C) for a given particle.
 # Note: This yields the true spatial resolution only after the global smoothing 

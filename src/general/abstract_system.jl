@@ -192,16 +192,25 @@ function finalize_interaction!(system, dv, v, u, dv_ode, v_ode, u_ode, semi)
     return system
 end
 
-@inline initial_smoothing_length(system) = smoothing_length(system, nothing)
+@inline initial_smoothing_length(system) = initial_smoothing_length(system, get_refinement(system))
 
-@inline function smoothing_length(system, particle)
-    return system.smoothing_length
-end
+@inline initial_smoothing_length(system, ::Nothing) = smoothing_length(system)
+
+@inline smoothing_length(system) = system.smoothing_length
+
+@inline smoothing_length(system, particle) = smoothing_length(system, get_refinement(system), particle)
+
+@inline smoothing_length(system, ::Nothing, particle) = smoothing_length(system)
+@inline smoothing_length(system, refinement, particle) = smoothing_length(system)[particle]
 
 @inline system_smoothing_kernel(system) = system.smoothing_kernel
 @inline system_correction(system) = nothing
 
-@inline particle_spacing(system, particle) = system.initial_condition.particle_spacing
+@inline function particle_spacing(system, particle)
+    return particle_spacing(system, get_refinement(system), particle)
+end
+
+@inline particle_spacing(system, ::Nothing, particle) = system.initial_condition.particle_spacing
 
 # Assuming a constant particle spacing one can calculate the number of neighbors within the
 # compact support for an undisturbed particle distribution.
