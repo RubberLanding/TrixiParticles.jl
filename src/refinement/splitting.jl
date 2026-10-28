@@ -100,7 +100,7 @@ end
 @inline function collect_split_candidates!(system::AbstractFluidSystem, refinement, v_ode,
                                            u_ode,
                                            semi)
-    (; splitting_pattern) = refinement
+    (; splitting_pattern, spacing_ratio) = refinement
     (; epsilon) = splitting_pattern
     (; reference_mass, split_candidates, delete_candidates) = system.cache
     smoothing_length_ratio = initial_smoothing_length(system) /
@@ -110,7 +110,7 @@ end
     @threaded semi for particle in eachparticle(system)
         is_alive = !delete_candidates[particle]
         particle_mass = hydrodynamic_mass(system, particle)
-        particle_mass_max = 1.05 * reference_mass[particle]
+        particle_mass_max = spacing_ratio * reference_mass[particle]
         split_candidates[particle] = is_alive && (particle_mass > particle_mass_max)
     end
 
