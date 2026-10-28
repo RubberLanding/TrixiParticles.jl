@@ -527,11 +527,13 @@ end
                                          v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
     (; delta_v) = cache
+    (; smoothing_length_factor) = refinement
 
     set_zero!(delta_v)
 
     NDIMS = ndims(system)
     v_max_ = v_max(shifting, v, system)
+    smoothing_length_factor_inv = 1 / smoothing_length_factor
 
     foreach_system(semi) do neighbor_system
         u_neighbor = wrap_u(u_ode, neighbor_system, semi)
@@ -559,7 +561,7 @@ end
             h_ab = (h_a + h_b) / 2
 
             kernel_weight = kernel(smoothing_kernel, distance, h_ab)
-            Wdx = kernel(smoothing_kernel, dx_a, h_ab)
+            Wdx = kernel(smoothing_kernel, h_ab * smoothing_length_factor_inv, h_ab)
             grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h_ab)
 
             delta_v_ = -v_max_ * (2 * h_a)^2 / (2 * dx_a) * (1 + (kernel_weight / Wdx)^4 * 2 / 10) *

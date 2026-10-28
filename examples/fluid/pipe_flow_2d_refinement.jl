@@ -150,6 +150,7 @@ open_boundary_model = BoundaryModelMirroringTafuni()
 reference_velocity_in = velocity_function2d
 reference_pressure_in = nothing
 reference_density_in = nothing
+# reference_density_in = fluid_density
 boundary_type_in = InFlow()
 face_in = ([0.0, 0.0], [0.0, domain_size[2]])
 inflow = BoundaryZone(; boundary_face=face_in, face_normal=flow_direction,
@@ -216,8 +217,6 @@ function apply_refinement!(integrator)
     semi = integrator.p.semi
     system = semi.systems[1]
     length_u_before = length(u_ode)
-
-    integrator.stats.naccept > 10 && TrixiParticles.@autoinfiltrate
 
     TrixiParticles.reset_refinement!(system,
                                      semi)

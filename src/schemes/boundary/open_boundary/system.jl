@@ -116,7 +116,11 @@ function OpenBoundarySystem(boundary_zones::Union{BoundaryZone, Nothing}...;
     smoothing_length = initial_smoothing_length(fluid_system)
 
     if !isnothing(get_refinement(fluid_system))
-        smoothing_length = fill(smoothing_length, nparticles(initial_conditions))
+        (; smoothing_length_factor) = fluid_system.particle_refinement
+        (; particle_spacing) = initial_conditions
+
+        boundary_smoothing_length = smoothing_length_factor * particle_spacing 
+        smoothing_length = fill(boundary_smoothing_length, nparticles(initial_conditions))
     end
 
     boundary_candidates = fill(false, nparticles(initial_conditions))
@@ -888,5 +892,4 @@ function check_boundary_zone_widths(boundary_zones, fluid_system)
     return nothing
 end
 
-@inline initial_smoothing_length(system::OpenBoundarySystem) =
-    initial_smoothing_length(system.fluid_system)
+@inline get_refinement(system::OpenBoundarySystem) = get_refinement(system.fluid_system)
