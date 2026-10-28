@@ -192,16 +192,43 @@ function finalize_interaction!(system, dv, v, u, dv_ode, v_ode, u_ode, semi)
     return system
 end
 
-@inline initial_smoothing_length(system) = initial_smoothing_length(system, get_refinement(system))
+@inline get_refinement(system::AbstractSystem) = nothing
 
-@inline initial_smoothing_length(system, ::Nothing) = smoothing_length(system)
+# Whether the system stores one smoothing length per particle.
+# This is independent of whether the system itself has a refinement (`get_refinement`).
+@inline has_variable_smoothing_length(system) = false
+
+@inline function initial_smoothing_length(system::AbstractSystem)
+    return initial_smoothing_length(system, Val(has_variable_smoothing_length(system)))
+end
+
+@inline initial_smoothing_length(system, ::Val{false}) = smoothing_length(system)
+
+@inline function initial_smoothing_length(system, ::Val{true})
+    return spacing_to_smoothing_length(system, system.initial_condition.particle_spacing)
+end
 
 @inline smoothing_length(system) = system.smoothing_length
 
-@inline smoothing_length(system, particle) = smoothing_length(system, get_refinement(system), particle)
+@inline function smoothing_length(system, particle)
+    return smoothing_length(system, Val(has_variable_smoothing_length(system)), particle)
+end
 
-@inline smoothing_length(system, ::Nothing, particle) = smoothing_length(system)
-@inline smoothing_length(system, refinement, particle) = smoothing_length(system)[particle]
+@inline smoothing_length(system, ::Val{false}, particle) = smoothing_length(system)
+@inline smoothing_length(system, ::Val{true}, particle) = smoothing_length(system)[particle]
+
+@inline function set_particle_smoothing_length!(system, particle, smoothing_length)
+    set_particle_smoothing_length!(system, Val(has_variable_smoothing_length(system)),
+                                   particle, smoothing_length)
+end
+
+@inline set_particle_smoothing_length!(system, ::Val{false}, particle, h) = system
+
+@inline function set_particle_smoothing_length!(system, ::Val{true}, particle, h)
+    smoothing_length(system)[particle] = h
+
+    return system
+end
 
 @inline system_smoothing_kernel(system) = system.smoothing_kernel
 @inline system_correction(system) = nothing

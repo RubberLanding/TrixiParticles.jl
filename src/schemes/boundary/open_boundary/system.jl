@@ -115,11 +115,9 @@ function OpenBoundarySystem(boundary_zones::Union{BoundaryZone, Nothing}...;
     smoothing_kernel = system_smoothing_kernel(fluid_system)
     smoothing_length = initial_smoothing_length(fluid_system)
 
-    if !isnothing(get_refinement(fluid_system))
-        (; smoothing_length_factor) = fluid_system.particle_refinement
-        (; particle_spacing) = initial_conditions
-
-        boundary_smoothing_length = smoothing_length_factor * particle_spacing 
+    if has_variable_smoothing_length(fluid_system)
+        boundary_smoothing_length = spacing_to_smoothing_length(fluid_system,
+                                                                initial_conditions.particle_spacing)
         smoothing_length = fill(boundary_smoothing_length, nparticles(initial_conditions))
     end
 
@@ -257,18 +255,6 @@ end
 
 # The `UpdateCallback` is required to update particle positions between time steps
 @inline requires_update_callback(system::OpenBoundarySystem, semi) = true
-
-function smoothing_length(system::OpenBoundarySystem, particle)
-    return smoothing_length(system, get_refinement(system.fluid_system), particle)
-end
-
-function smoothing_length(system::OpenBoundarySystem, ::Nothing, particle)
-    return system.smoothing_length
-end
-
-function smoothing_length(system::OpenBoundarySystem, refinement, particle)
-    return system.smoothing_length[particle]
-end
 
 @inline acceleration_source(system::OpenBoundarySystem) = system.fluid_system.acceleration
 
@@ -564,22 +550,6 @@ end
     deactivate_particle!(fluid_system, particle, v_fluid, u_fluid)
 
     return fluid_system
-end
-
-@inline function set_particle_smoothing_length!(system::OpenBoundarySystem, particle,
-                                                smoothing_length)
-    set_particle_smoothing_length!(system, get_refinement(system.fluid_system), particle,
-                                   smoothing_length)
-end
-
-@inline function set_particle_smoothing_length!(system::OpenBoundarySystem, refinement,
-                                                particle, particle_smoothing_length)
-    smoothing_length(system)[particle] = particle_smoothing_length
-end
-
-@inline function set_particle_smoothing_length!(system::OpenBoundarySystem, ::Nothing,
-                                                particle, particle_smoothing_length)
-    nothing
 end
 
 @inline function transfer_particle!(system_new, system_old, particle_old, particle_new,
@@ -892,4 +862,17 @@ function check_boundary_zone_widths(boundary_zones, fluid_system)
     return nothing
 end
 
-@inline get_refinement(system::OpenBoundarySystem) = get_refinement(system.fluid_system)
+# The open boundary has no refinement of its own, but it carries the per-particle
+# smoothing lengths of the fluid particles that enter it.
+@inline function has_variable_smoothing_length(system::OpenBoundarySystem)
+    return has_variable_smoothing_length(system.fluid_system)
+end
+
+@inline function spacing_to_smoothing_length(system::OpenBoundarySystem, particle_spacing)
+    return spacing_to_smoothing_length(system.fluid_system, particle_spacing)
+end
+
+# Spacing from the mass, using the reference density of the fluid's refinement
+@inline function particle_spacing(system::OpenBoundarySystem, particle)
+    return particle_spacing(system, get_refinement(system.fluid_system), particle)
+end

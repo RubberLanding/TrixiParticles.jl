@@ -455,12 +455,12 @@ end
 
 @fastpow function update_shifting_inner!(system, shifting::ParticleShiftingTechnique,
                                          v, u, v_ode, u_ode, semi)
-    refinement = get_refinement(system)
-
-    update_shifting_inner!(refinement, system, shifting, v, u, v_ode, u_ode, semi)
+    update_shifting_inner!(Val(has_variable_smoothing_length(system)), system, shifting,
+                           v, u, v_ode, u_ode, semi)
 end
 
-@fastpow function update_shifting_inner!(::Nothing, system, shifting::ParticleShiftingTechnique,
+@fastpow function update_shifting_inner!(::Val{false}, system,
+                                         shifting::ParticleShiftingTechnique,
                                          v, u, v_ode, u_ode, semi)
     (; cache) = system
     (; delta_v) = cache
@@ -523,17 +523,18 @@ end
     return system
 end
 
-@fastpow function update_shifting_inner!(refinement, system, shifting::ParticleShiftingTechnique,
+@fastpow function update_shifting_inner!(::Val{true}, system,
+                                         shifting::ParticleShiftingTechnique,
                                          v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
     (; delta_v) = cache
-    (; smoothing_length_factor) = refinement
 
     set_zero!(delta_v)
 
     NDIMS = ndims(system)
     v_max_ = v_max(shifting, v, system)
-    smoothing_length_factor_inv = 1 / smoothing_length_factor
+    # Inverse of the smoothing length factor h / Δs
+    smoothing_length_factor_inv = 1 / spacing_to_smoothing_length(system, one(eltype(system)))
 
     foreach_system(semi) do neighbor_system
         u_neighbor = wrap_u(u_ode, neighbor_system, semi)

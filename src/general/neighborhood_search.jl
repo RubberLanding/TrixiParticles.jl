@@ -92,9 +92,8 @@ end
 
 @inline function compact_support(system::AbstractFluidSystem, neighbor, particle)
     (; smoothing_kernel) = system
-    smoothing_length = system.smoothing_length[particle]
 
-    return compact_support(smoothing_kernel, smoothing_length)
+    return compact_support(smoothing_kernel, smoothing_length(system, particle))
 end
 
 # -- Open boundary systems
@@ -681,14 +680,14 @@ end
                                             system_coords, neighbor_coords,
                                             neighborhood_search, args...;
                                             kwargs...) where {F}
-    ref1 = get_refinement(system)
-    ref2 = get_refinement(neighbor_system)
-    foreach_symmetric_neighbor_dispatch(f, ref1, ref2, system, neighbor_system,
+    has_system_variable_smoothing_length = Val(has_variable_smoothing_length(system))
+    has_neighbor_variable_smoothing_length = Val(has_variable_smoothing_length(neighbor_system))
+    foreach_symmetric_neighbor_dispatch(f, has_system_variable_smoothing_length, has_neighbor_variable_smoothing_length, system, neighbor_system,
                                         system_coords, neighbor_coords,
                                         neighborhood_search, args...; kwargs...)
 end
 
-@inline function foreach_symmetric_neighbor_dispatch(f::F, ::Nothing, ::Nothing,
+@inline function foreach_symmetric_neighbor_dispatch(f::F, ::Val{false}, ::Val{false},
                                                      system, neighbor_system,
                                                      system_coords, neighbor_coords,
                                                      neighborhood_search, args...;
@@ -696,7 +695,7 @@ end
     foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search, args...; kwargs...)
 end
 
-@inline function foreach_symmetric_neighbor_dispatch(f::F, ref1, ref2,
+@inline function foreach_symmetric_neighbor_dispatch(f::F, system_has_variable_smoothing_length, neighbor_has_variable_smoothing_length,
                                                      system, neighbor_system,
                                                      system_coords, neighbor_coords,
                                                      neighborhood_search, args...;

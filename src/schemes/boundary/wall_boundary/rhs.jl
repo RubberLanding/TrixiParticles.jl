@@ -18,7 +18,7 @@ function interact!(dv, v_particle_system, u_particle_system,
               v_neighbor_system, u_neighbor_system,
               particle_system,
               neighbor_system,
-              semi, get_refinement(neighbor_system))
+              semi, Val(has_variable_smoothing_length(neighbor_system)))
 end
 
 # For dummy particles with `ContinuityDensity`, solve the continuity equation
@@ -27,7 +27,7 @@ function interact!(dv, v_particle_system, u_particle_system,
                    particle_system::WallBoundarySystem{<:BoundaryModelDummyParticles{ContinuityDensity}},
                    neighbor_system::Union{AbstractFluidSystem,
                                           OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang}},
-                   semi, refinement::Nothing)
+                   semi, ::Val{false})
     (; boundary_model) = particle_system
 
     system_coords = current_coordinates(u_particle_system, particle_system)
@@ -76,8 +76,9 @@ end
 function interact!(dv, v_particle_system, u_particle_system,
                    v_neighbor_system, u_neighbor_system,
                    particle_system::WallBoundarySystem{<:BoundaryModelDummyParticles{ContinuityDensity}},
-                   neighbor_system::AbstractFluidSystem,
-                   semi, refinement)
+                   neighbor_system::Union{AbstractFluidSystem,
+                                          OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang}},
+                   semi, ::Val{true})
     (; boundary_model) = particle_system
 
     system_coords = current_coordinates(u_particle_system, particle_system)

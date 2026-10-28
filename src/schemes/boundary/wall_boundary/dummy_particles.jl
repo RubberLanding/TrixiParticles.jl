@@ -639,7 +639,7 @@ end
                              neighbor_system, v, v_neighbor_system,
                              particle, neighbor, pos_diff, distance,
                              viscosity, cache, pressure, pressure_offset,
-                             get_refinement(neighbor_system))
+                             Val(has_variable_smoothing_length(neighbor_system)))
 end
 
 @propagate_inbounds function boundary_pressure_inner!(boundary_model,
@@ -649,7 +649,7 @@ end
                                                       v, v_neighbor_system, particle,
                                                       neighbor, pos_diff, distance,
                                                       viscosity, cache, pressure,
-                                                      pressure_offset, refinement::Nothing)
+                                                      pressure_offset, ::Val{false})
     density_neighbor = current_density(v_neighbor_system, neighbor_system, neighbor)
 
     # Fluid pressure term
@@ -686,7 +686,7 @@ end
                                                       v, v_neighbor_system, particle,
                                                       neighbor, pos_diff, distance,
                                                       viscosity, cache, pressure,
-                                                      pressure_offset, refinement)
+                                                      pressure_offset, ::Val{true})
     density_neighbor = current_density(v_neighbor_system, neighbor_system, neighbor)
 
     # Fluid pressure term

@@ -53,22 +53,6 @@ end
     current_mass(system)[particle] = mass
 end
 
-@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, particle,
-                                                smoothing_length)
-    set_particle_smoothing_length!(system, system.particle_refinement, particle,
-                                   smoothing_length)
-end
-
-@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, refinement,
-                                                particle, particle_smoothing_length)
-    smoothing_length(system)[particle] = particle_smoothing_length
-end
-
-@inline function set_particle_smoothing_length!(system::AbstractFluidSystem, ::Nothing,
-                                                particle, particle_smoothing_length)
-    nothing
-end
-
 function create_cache_density(initial_condition, ::SummationDensity)
     density = similar(initial_condition.density)
 
@@ -84,14 +68,8 @@ end
     return system.mass[particle]
 end
 
-@inline spacing_to_smoothing_length(system::AbstractFluidSystem,
-                                    particle_spacing) = system.particle_refinement.smoothing_length_factor *
-                                                        particle_spacing
-
-function initial_smoothing_length(system, refinement)
-    # TODO
-    return refinement.smoothing_length_factor *
-           system.initial_condition.particle_spacing
+@inline function spacing_to_smoothing_length(system::AbstractFluidSystem, particle_spacing)
+    return get_refinement(system).smoothing_length_factor * particle_spacing
 end
 
 # Compute the effective particle spacing (Δs = h / C) for a given particle.
@@ -357,8 +335,11 @@ function available_data(::AbstractFluidSystem)
     return (:coordinates, :velocity, :mass, :density, :pressure, :acceleration)
 end
 
-@inline get_refinement(system) = nothing
 @inline get_refinement(system::AbstractFluidSystem) = system.particle_refinement
+
+@inline function has_variable_smoothing_length(system::AbstractFluidSystem)
+    return !isnothing(get_refinement(system))
+end
 
 include("pressure_acceleration.jl")
 include("viscosity.jl")
