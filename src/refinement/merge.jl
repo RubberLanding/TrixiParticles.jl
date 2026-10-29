@@ -6,17 +6,35 @@ function merge_particles!(semi, v_ode, u_ode)
     return semi
 end
 
-@inline merge_particles!(system, v_ode, u_ode, semi) = system
+@inline merge_particles!(system, v_ode, u_ode, semi; kwargs...) = system
 
-@inline function merge_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi)
-    return merge_particles!(system, system.particle_refinement, v_ode, u_ode, semi)
+@inline function merge_particles!(system::AbstractFluidSystem, v_ode, u_ode, semi;
+                                  kwargs...)
+    return merge_particles!(system, system.particle_refinement, v_ode, u_ode, semi;
+                            kwargs...)
 end
 
 @inline merge_particles!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
-                         semi) = system
+                         semi; kwargs...) = system
 
+# Merge before splitting. As in the reference code, this is done once and every particle
+# that is not split is a candidate, since its mass is below `m_max`.
+@inline merge_particles_pre_split!(system, v_ode, u_ode, semi) = system
+
+@inline function merge_particles_pre_split!(system::AbstractFluidSystem, v_ode, u_ode, semi)
+    refinement = system.particle_refinement
+    isnothing(refinement) && return system
+
+    return merge_particles!(system, refinement, v_ode, u_ode, semi;
+                            merge_iter=1, mass_gate_factor=refinement.max_mass_factor)
+end
+
+# By default, merge after splitting. As in the reference code, this is done three times
+# and only particles below `m_min` are candidates, so that the children of a split
+# are merged back only if they are too small for the target spacing.
 @inline function merge_particles!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
-                                  semi; merge_iter=3)
+                                  semi; merge_iter=3,
+                                  mass_gate_factor=refinement.min_mass_factor)
     (; cache) = system
     (; delete_candidates) = cache
 
@@ -33,7 +51,7 @@ end
     # Merge the particles
     for i in 1:merge_iter
         # TrixiParticles.@autoinfiltrate
-        collect_merge_candidates!(system, refinement, v, u, semi)
+        collect_merge_candidates!(system, refinement, v, u, semi, mass_gate_factor)
         # TrixiParticles.@autoinfiltrate
         apply_merging!(system, refinement, v, u, semi)
         # TrixiParticles.@autoinfiltrate
@@ -49,8 +67,9 @@ end
     return system
 end
 
-function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi)
-    (; spacing_ratio) = refinement
+function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi,
+                                   mass_gate_factor)
+    (; max_mass_factor) = refinement
     (; reference_mass, merge_candidates, delete_candidates) = system.cache
 
     set_zero!(merge_candidates)
@@ -76,11 +95,16 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
             h_b = smoothing_length(system, neighbor)
             distance >= (h_a + h_b) / 2 && return
 
-            # Do not merge particles if m_a + m_b >= max(m_max_a, m_max_b)
-            m_merge = hydrodynamic_mass(system, particle) +
-                      hydrodynamic_mass(system, neighbor)
-            m_merge >=
-            spacing_ratio * min(reference_mass[particle], reference_mass[neighbor]) &&
+            # Only merge particles below the mass gate.
+            # Before splitting, this is `m_max`, after splitting, this is `m_min`.
+            m_a = hydrodynamic_mass(system, particle)
+            m_b = hydrodynamic_mass(system, neighbor)
+            m_a >= mass_gate_factor * reference_mass[particle] && return
+            m_b >= mass_gate_factor * reference_mass[neighbor] && return
+
+            # Do not merge particles if m_a + m_b >= min(m_max_a, m_max_b)
+            m_a + m_b >=
+            max_mass_factor * min(reference_mass[particle], reference_mass[neighbor]) &&
                 return
 
             # TrixiParticles.@autoinfiltrate

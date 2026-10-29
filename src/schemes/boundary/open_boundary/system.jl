@@ -509,6 +509,9 @@ end
     transfer_particle!(fluid_system, system, particle, particle_new,
                        v_fluid, u_fluid, v, u, periodic_box)
 
+    # Set the target spacing of the new fluid particle when using refinement
+    initialize_refined_particle!(fluid_system, particle_new)
+
     # Reset position of boundary particle back to the beginning of the boundary zone.
     # If we translated it by exactly `zone_width` along `-face_normal`, rounding
     # errors could place it just outside the zone. To avoid this, use a slightly
@@ -695,8 +698,8 @@ end
 function interpolate_velocity!(system::OpenBoundarySystem, boundary_zone,
                                v_ode, u_ode, semi)
     (; sample_points, sample_velocity, shepard_coefficient) = boundary_zone.cache
-    smoothing_length = initial_smoothing_length(system)
-    system_smoothing_kernel = system_smoothing_kernel(system)
+    h_a = initial_smoothing_length(system)
+    smoothing_kernel = system_smoothing_kernel(system)
 
     set_zero!(shepard_coefficient)
     set_zero!(sample_velocity)
@@ -725,8 +728,8 @@ function interpolate_velocity!(system::OpenBoundarySystem, boundary_zone,
 
             # Fetch the neighbor's variable smoothing length and calculate the symmetric average
             h_b = smoothing_length(neighbor_system, neighbor)
-            h_ab = (smoothing_length + h_b) / 2
-            W_ab = kernel(system_smoothing_kernel, distance, h_ab)            
+            h_ab = (h_a + h_b) / 2
+            W_ab = kernel(smoothing_kernel, distance, h_ab)
             @inbounds shepard_coefficient[point] += volume_b * W_ab
 
             velocity_neighbor_ = @inbounds current_velocity(v_neighbor, neighbor_system,

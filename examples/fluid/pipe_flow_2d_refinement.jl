@@ -46,6 +46,8 @@ fluid_density = 1000.0
 
 sound_speed = 10 * maximum(abs.(prescribed_velocity))
 
+# The pipe walls and the open boundaries have the minimum spacing of the refinement.
+# They hold the fluid next to them at this spacing.
 pipe = RectangularTank(particle_spacing, domain_size, domain_size, fluid_density;
                        n_layers=boundary_layers, velocity=prescribed_velocity,
                        faces=(false, false, true, true),
@@ -123,7 +125,9 @@ refinement_criteria = (spatial_criterion, inlet_criterion, outlet_criterion)
 n_buffer_refinement_particles = 1000
 n_buffer_particles += n_buffer_refinement_particles
 
-refinement = ParticleRefinement(; spacing_ratio=1.05,
+# With `spacing_ratio=1.2`, it takes `log(2) / log(1.2) ≈ 4` neighborhoods
+# to grade from `min_spacing` to `max_spacing`
+refinement = ParticleRefinement(; spacing_ratio=1.2,
                                 min_spacing, max_spacing,
                                 smoothing_length_factor=smoothing_length_ratio,
                                 reference_density=fluid_density,
@@ -149,8 +153,9 @@ open_boundary_model = BoundaryModelMirroringTafuni()
 
 reference_velocity_in = velocity_function2d
 reference_pressure_in = nothing
-reference_density_in = nothing
-# reference_density_in = fluid_density
+# Prescribe the density in the open boundaries. Extrapolating it from the fluid
+# is unstable when particles of different masses enter the boundary zones.
+reference_density_in = fluid_density
 boundary_type_in = InFlow()
 face_in = ([0.0, 0.0], [0.0, domain_size[2]])
 inflow = BoundaryZone(; boundary_face=face_in, face_normal=flow_direction,
@@ -162,7 +167,7 @@ inflow = BoundaryZone(; boundary_face=face_in, face_normal=flow_direction,
 
 reference_velocity_out = nothing
 reference_pressure_out = 0.0
-reference_density_out = nothing
+reference_density_out = fluid_density
 boundary_type_out = OutFlow()
 face_out = ([min_coords_outlet[1], 0.0], [min_coords_outlet[1], domain_size[2]])
 outflow = BoundaryZone(; boundary_face=face_out, face_normal=(-flow_direction),
@@ -211,52 +216,21 @@ extra_callback = nothing
 
 v_tmp = similar(ode.u0.x[1])
 u_tmp = similar(ode.u0.x[2])
+startup_done = Ref(false)
 function apply_refinement!(integrator)
     v_ode = integrator.u.x[1]
     u_ode = integrator.u.x[2]
     semi = integrator.p.semi
-    system = semi.systems[1]
     length_u_before = length(u_ode)
 
-    TrixiParticles.reset_refinement!(system,
-                                     semi)
-    TrixiParticles.compact_system!(system, v_ode,
-                                   u_ode, semi)
-    neighborhood_search = TrixiParticles.get_neighborhood_search(system,
-                                                                 semi)
-    u = TrixiParticles.wrap_u(u_ode, system,
-                              semi)
+    # Build the graded spacing field before the first time step
+    if !startup_done[]
+        TrixiParticles.refinement_startup!(semi, v_ode, u_ode, v_tmp, u_tmp)
+        startup_done[] = true
+    end
 
-    TrixiParticles.update_nhs!(neighborhood_search,
-                               system,
-                               system, u, u,
-                               semi)
-
-    TrixiParticles.apply_refinement_criteria!(system,
-                                              v_ode,
-                                              u_ode,
-                                              semi)
-
-    TrixiParticles.update_particle_spacing(system,
-                                           v_ode,
-                                           u_ode,
-                                           semi)
-
-    TrixiParticles.split_particles!(semi, v_ode,
-                                    u_ode, v_tmp,
-                                    u_tmp)
-
-    TrixiParticles.merge_particles!(system,
-                                    v_ode, u_ode,
-                                    semi)
-
-    TrixiParticles.shift_particles!(system,
-                                    v_ode, u_ode,
-                                    semi)
+    TrixiParticles.refinement!(semi, v_ode, u_ode, v_tmp, u_tmp)
     # TrixiParticles.@autoinfiltrate
-
-    # Update the neighborhoodsearches of all systems
-    TrixiParticles.update_nhs!(semi, u_ode)
 
     if length(u_ode) > length_u_before
         resize!(integrator,

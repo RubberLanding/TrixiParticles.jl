@@ -12,11 +12,18 @@ struct ParticleRefinement{RC, ELTYPE, SP, SC}
     splitting_pattern       :: SP
     shifting_technique      :: SC
     reference_density       :: ELTYPE
+    max_mass_factor         :: ELTYPE    # m_max = max_mass_factor * m_ref, split above and merge below this mass
+    min_mass_factor         :: ELTYPE    # m_min = min_mass_factor * m_ref, only particles below this mass merge after splitting
+    n_startup_rounds        :: Int       # Number of refinement rounds in `refinement_startup!`
 end
 
 function ParticleRefinement(; spacing_ratio, min_spacing, max_spacing,
                             reference_density,
                             smoothing_length_factor=1.2,
+                            max_mass_factor=1.05, min_mass_factor=0.5,
+                            n_startup_rounds=default_n_startup_rounds(spacing_ratio,
+                                                                      min_spacing,
+                                                                      max_spacing),
                             refinement_criteria=SpatialRefinementCriterion(),
                             splitting_pattern=HexagonalSplitting(),
                             shifting_technique=ParticleShiftingTechniqueSun2017())
@@ -27,13 +34,28 @@ function ParticleRefinement(; spacing_ratio, min_spacing, max_spacing,
     return ParticleRefinement(refinement_criteria, spacing_ratio, min_spacing, max_spacing,
                               smoothing_length_factor,
                               splitting_pattern,
-                              shifting_technique, reference_density)
+                              shifting_technique, reference_density,
+                              max_mass_factor, min_mass_factor, n_startup_rounds)
 end
 
-# TODO
+# The spacing changes by at most `spacing_ratio` per call of Alg. 1, so it takes
+# `log(max_spacing / min_spacing) / log(spacing_ratio)` calls to build the full band.
+# As in the reference code, use three times this number.
+function default_n_startup_rounds(spacing_ratio, min_spacing, max_spacing)
+    n_levels = ceil(Int, log(max_spacing / min_spacing) / log(spacing_ratio))
+
+    return 3 * max(n_levels, 1)
+end
+
 function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
+    return refinement!(semi, v_ode, u_ode, v_tmp, u_tmp)
+end
+
+function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp)
     foreach_system(semi) do system
-        # Reset the refinement before doing anything
+        isnothing(get_refinement(system)) && return
+
+        # Reset the refinement flags. Note that the target spacing is persistent.
         reset_refinement!(system, semi)
 
         # Move active particles to the start and inactive particles to the end
@@ -44,34 +66,51 @@ function refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
         u = wrap_u(u_ode, system, semi)
         update_nhs!(neighborhood_search, system, system, u, u, semi)
 
-        # Apply refinement criterion 
+        # Set the target spacing near boundaries and in criterion regions (Alg. 4)
         apply_refinement_criteria!(system, v_ode, u_ode, semi)
 
-        # Update the spacing of particles           (Algorithm 1)
+        # Update the spacing of all other particles (Alg. 1)
         update_particle_spacing(system, v_ode, u_ode, semi)
+
+        # Merge before splitting, every particle below `m_max` is a candidate (Alg. 3)
+        merge_particles_pre_split!(system, v_ode, u_ode, semi)
     end
 
-    # Split the particles                           (Algorithm 2)
+    # Split the particles (Alg. 2)
     split_particles!(semi, v_ode, u_ode, v_tmp, u_tmp)
 
+    # Merge after splitting, only particles below `m_min` are candidates (Alg. 3)
     foreach_system(semi) do system
-        # Merge the particles                       (Algorithm 3)
         merge_particles!(system, v_ode, u_ode, semi)
-
-        # Move active particles to the start and inactive particles to the end
-        compact_system!(system, v_ode, u_ode, semi)
     end
 
     # After adding and deleting particles,
     # we need to update the nhs
     update_nhs!(semi, u_ode)
 
+    # Shift the particles and correct the particle properties.
+    # This also updates the smoothing lengths (Eq. 35).
     foreach_system(semi) do system
-        # Update smoothing lengths
-        update_smoothing_lengths!(system, v_ode, u_ode, semi)
+        shift_particles!(system, v_ode, u_ode, semi)
+    end
 
-        # Shift the particles and correct the particle properties
-        shift_particles!(system, v_ode, u_ode, semi, integrator.dt)
+    update_nhs!(semi, u_ode)
+
+    return semi
+end
+
+# Build the graded spacing field and the matching particle distribution
+# before the time integration starts.
+function refinement_startup!(semi, v_ode, u_ode, v_tmp, u_tmp)
+    n_rounds = 0
+    foreach_system(semi) do system
+        refinement = get_refinement(system)
+        isnothing(refinement) && return
+        n_rounds = max(n_rounds, refinement.n_startup_rounds)
+    end
+
+    for _ in 1:n_rounds
+        refinement!(semi, v_ode, u_ode, v_tmp, u_tmp)
     end
 
     return semi
@@ -94,9 +133,16 @@ function create_cache_refinement(initial_condition, refinement)
     split_candidates = zeros(Bool, n_particles)
     merge_candidates = zeros(Int, n_particles)
 
-    is_boundary_adjacent = zeros(Bool, n_particles)
-    reference_mass = zeros(ELTYPE, n_particles)
-    _particle_spacing = zeros(ELTYPE, n_particles)
+    # Marks particles whose spacing was set by a criterion in this call.
+    # Fixed particles are skipped in the spacing update (Alg. 1).
+    is_fixed = zeros(Bool, n_particles)
+
+    # The target spacing is stored per particle and persists between refinement calls.
+    # Initialize it with the spacing that corresponds to the initial mass.
+    _particle_spacing = (initial_condition.mass ./ refinement.reference_density) .^
+                        (1 / NDIMS)
+    _particle_spacing_tmp = copy(_particle_spacing)
+    reference_mass = refinement.reference_density .* _particle_spacing .^ NDIMS
 
     candidate_flags = zeros(Int, n_particles)
     candidate_offsets = zeros(Int, n_particles)
@@ -109,7 +155,7 @@ function create_cache_refinement(initial_condition, refinement)
     grad_velocity = zeros(ELTYPE, NDIMS * NDIMS * n_particles)
 
     return (; delete_candidates, split_candidates, merge_candidates,
-            is_boundary_adjacent, reference_mass, _particle_spacing,
+            is_fixed, reference_mass, _particle_spacing, _particle_spacing_tmp,
             candidate_flags, candidate_offsets,
             neighbor_mass, neighbor_count, grad_density, grad_pressure, grad_velocity)
 end
@@ -136,20 +182,16 @@ function reset_refinement!(system::AbstractFluidSystem, refinement, semi)
     return system
 end
 
-# TODO 
+# Note that `_particle_spacing` and `reference_mass` are not reset,
+# since the spacing of the previous call is needed in the spacing update (Alg. 1).
 function reset_cache_refinement!(system, cache)
-    (; particle_spacing) = system.initial_condition
     (; delete_candidates, split_candidates, merge_candidates, reference_mass,
-     _particle_spacing, candidate_flags, candidate_offsets,
-     neighbor_count, neighbor_mass) = cache
+     candidate_flags, candidate_offsets, neighbor_count, neighbor_mass) = cache
     ELTYPE = eltype(reference_mass)
 
     fill!(delete_candidates, false)
     fill!(split_candidates, false)
     fill!(merge_candidates, 0)
-
-    fill!(reference_mass, zero(ELTYPE))
-    fill!(_particle_spacing, particle_spacing)
 
     fill!(candidate_flags, 0)
     fill!(candidate_offsets, 0)
@@ -210,6 +252,29 @@ function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_od
     return system
 end
 
+# A particle that is activated in a fluid system, e.g. by an inflow, gets the target spacing
+# that corresponds to its mass. Otherwise, it would keep the values of the buffer slot.
+@inline initialize_refined_particle!(system, particle) = system
+
+@inline function initialize_refined_particle!(system::AbstractFluidSystem, particle)
+    return initialize_refined_particle!(system, get_refinement(system), particle)
+end
+
+@inline initialize_refined_particle!(system, ::Nothing, particle) = system
+
+@inline function initialize_refined_particle!(system, refinement, particle)
+    (; _particle_spacing, reference_mass, is_fixed, delete_candidates) = system.cache
+    (; reference_density) = refinement
+
+    mass = hydrodynamic_mass(system, particle)
+    _particle_spacing[particle] = (mass / reference_density)^(1 / ndims(system))
+    reference_mass[particle] = mass
+    is_fixed[particle] = false
+    delete_candidates[particle] = false
+
+    return system
+end
+
 @inline compact_system!(system, v_ode, u_ode, semi) = system
 
 @inline function compact_system!(system::AbstractFluidSystem, v_ode, u_ode, semi)
@@ -248,6 +313,7 @@ function compact_system!(system, refinement, v_ode, u_ode, semi)
     # Apply to data in the cache
     cache.reference_mass .= cache.reference_mass[perm]
     cache._particle_spacing .= cache._particle_spacing[perm]
+    cache.is_fixed .= cache.is_fixed[perm]
     cache.delete_candidates .= cache.delete_candidates[perm]
 
     # Update buffer

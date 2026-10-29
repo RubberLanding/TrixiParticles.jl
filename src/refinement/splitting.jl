@@ -100,17 +100,15 @@ end
 @inline function collect_split_candidates!(system::AbstractFluidSystem, refinement, v_ode,
                                            u_ode,
                                            semi)
-    (; splitting_pattern, spacing_ratio) = refinement
+    (; splitting_pattern, max_mass_factor) = refinement
     (; epsilon) = splitting_pattern
     (; reference_mass, split_candidates, delete_candidates) = system.cache
-    smoothing_length_ratio = initial_smoothing_length(system) /
-                             system.initial_condition.particle_spacing
 
     split_candidates .= false
     @threaded semi for particle in eachparticle(system)
         is_alive = !delete_candidates[particle]
         particle_mass = hydrodynamic_mass(system, particle)
-        particle_mass_max = spacing_ratio * reference_mass[particle]
+        particle_mass_max = max_mass_factor * reference_mass[particle]
         split_candidates[particle] = is_alive && (particle_mass > particle_mass_max)
     end
 
@@ -133,8 +131,10 @@ end
         @threaded semi for particle in eachparticle(system)
             !split_candidates[particle] && return
 
-            split_radius = epsilon * smoothing_length_ratio *
-                           particle_spacing(system, particle)
+            # The children are placed at `epsilon * h` around the parent (see `apply_splitting!`).
+            # Note that `h / particle_spacing` is not constant, since the smoothing length
+            # is set from the average neighbor mass (Eq. 35).
+            split_radius = epsilon * smoothing_length(system, particle)
             min_distance = split_radius + 0.05 * neighbor_system_spacing
             particle_radius = compact_support(system, system, particle)
 
@@ -150,6 +150,32 @@ end
         end
     end
 
+    # Do not split a particle if one of its children would be placed in an open boundary zone,
+    # where it would immediately be converted to an open boundary particle.
+    # Note that `OpenBoundarySystem` is not an `AbstractBoundarySystem`.
+    (; relative_position) = splitting_pattern
+    foreach_system(semi) do neighbor_system
+        neighbor_system isa OpenBoundarySystem || return
+        (; boundary_zones) = neighbor_system
+
+        @threaded semi for particle in eachparticle(system)
+            !split_candidates[particle] && return
+
+            pos_particle = current_coords(u, system, particle)
+            h = smoothing_length(system, particle)
+
+            for child_offset in relative_position
+                child_pos = pos_particle + h * child_offset
+
+                foreach_noalloc(boundary_zones) do boundary_zone
+                    if is_in_boundary_zone(boundary_zone, child_pos)
+                        split_candidates[particle] = false
+                    end
+                end
+            end
+        end
+    end
+
     n_childs_exclude_center = nchilds(splitting_pattern) - 1
     total_new_particles = sum(split_candidates) * n_childs_exclude_center
 
@@ -159,7 +185,8 @@ end
 @inline function apply_splitting!(system::AbstractFluidSystem, particle_refinement, v, u,
                                   semi)
     (; splitting_pattern) = particle_refinement
-    (; candidate_flags, candidate_offsets, reference_mass, split_candidates) = system.cache
+    (; candidate_flags, candidate_offsets, reference_mass, _particle_spacing,
+     split_candidates) = system.cache
     (; alpha, relative_position) = splitting_pattern
     (; active_particle, active_particle_count) = system.buffer
 
@@ -188,6 +215,7 @@ end
         # rho_particle = current_density(v, system, particle) # Not reliable for EDAC
 
         reference_mass_particle = reference_mass[particle]
+        spacing_particle = _particle_spacing[particle]
         pos_particle = current_coords(u, system, particle)
         vel_particle = current_velocity(v, system, particle)
 
@@ -207,7 +235,9 @@ end
             set_particle_position!(u, system, global_child_idx, new_pos)
             set_particle_pressure!(v, system, global_child_idx, pressure_particle)
 
+            # The children inherit the persistent target spacing of the parent
             reference_mass[global_child_idx] = reference_mass_particle
+            _particle_spacing[global_child_idx] = spacing_particle
             active_particle[global_child_idx] = true
         end
     end

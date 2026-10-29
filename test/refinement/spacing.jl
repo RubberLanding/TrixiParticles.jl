@@ -1,25 +1,19 @@
-@testset "Test `update_particle_spacing`." begin
+@testset verbose=true "`update_particle_spacing`" begin
     particle_spacing = 0.1
+    min_spacing = 0.05
     n_particles = 10
-    n_layers = 1
     width = particle_spacing * n_particles
     height = particle_spacing * n_particles
-    density = 257
+    density = 257.0
+    spacing_ratio = 1.05
 
     smoothing_kernel = SchoenbergCubicSplineKernel{2}()
     smoothing_length = 1.5 * particle_spacing
     state_equation = StateEquationCole(sound_speed=10, reference_density=density,
                                        exponent=7)
 
-    refinement = ParticleRefinement(n_particles=n_particles,
-                                    smoothing_length=smoothing_length,
-                                    initial_particle_spacing=particle_spacing,
-                                    spacing_ratio=1.05,
-                                    min_spacing=particle_spacing)
-
     tank = RectangularTank(particle_spacing, (width, height), (width, height),
-                           density, n_layers=n_layers,
-                           faces=(true, true, true, false))
+                           density, n_layers=1, faces=(true, true, true, false))
 
     boundary_model = BoundaryModelDummyParticles(tank.boundary.density,
                                                  tank.boundary.mass,
@@ -28,66 +22,106 @@
                                                  smoothing_kernel, smoothing_length)
     boundary_system = WallBoundarySystem(tank.boundary, boundary_model)
 
-    fluid_system = WeaklyCompressibleSPHSystem(tank.fluid, SummationDensity(),
-                                               state_equation,
-                                               smoothing_kernel, smoothing_length,
+    refinement = ParticleRefinement(; spacing_ratio, min_spacing,
+                                    max_spacing=particle_spacing,
+                                    reference_density=density,
+                                    smoothing_length_factor=1.5)
+
+    fluid_system = WeaklyCompressibleSPHSystem(tank.fluid; smoothing_kernel,
+                                               smoothing_length, state_equation,
+                                               density_calculator=SummationDensity(),
                                                particle_refinement=refinement)
-    fluid_system.cache.density .= tank.fluid.density
 
     semi = Semidiscretization(fluid_system, boundary_system)
     ode = semidiscretize(semi, (0, 0))
-
     v_ode, u_ode = ode.u0.x
 
-    @testset "Test Uniform Particle Spacing" begin 
-        particle_spacing_before = fluid_system.particle_spacing
+    (; _particle_spacing, reference_mass, is_fixed) = fluid_system.cache
+    center = argmin(vec(sum(abs2, tank.fluid.coordinates .- [width / 2, height / 2],
+                            dims=1)))
+    n_fluid = nparticles(fluid_system)
 
-        TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode,
-                                            u_ode, semi)
+    @testset "Initialization From Mass" begin
+        @test all(isapprox.(_particle_spacing, particle_spacing))
+        @test all(isapprox.(reference_mass, tank.fluid.mass))
+    end
 
-        particle_spacing_after = fluid_system.particle_spacing
-        ref_mass_after = fluid_system.cache.reference_mass
+    @testset "Uniform Spacing" begin
+        fill!(is_fixed, false)
+        _particle_spacing .= particle_spacing
 
-        # Since the tank is initialized uniformly with a spacing of 0.1, 
-        # and neighbors also have 0.1, the algorithm should return the exact same values.    
-        @test particle_spacing_after == particle_spacing_before
-        @test all(ref_mass_after .== density * particle_spacing^ndims(fluid_system))
-    end 
+        TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode,
+                                               semi)
 
-    # Manually perturb the spacing to trigger the update logic.
-    @testset "Test Smoothing Logic" begin
-    center_idx = 55
-    fluid_system.particle_spacing .= 0.1
-    
-    # IF-CASE 
-    # Neighbors = 0.1, Center = 0.096
-    # Ratio = 0.1 / 0.096 ≈ 1.041 < 1.1576
-    # Expected: New = min(s_max, Cr * s_min)
-    #               = min(0.1, 1.05 * 0.096) 
-    #               = min(0.1, 0.1008) 
-    #               = 0.1
-    fluid_system.particle_spacing[center_idx] = 0.096
-    
-    TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode, semi)
-    
-    @test fluid_system.particle_spacing[center_idx] == 0.1
-    
-    # ELSE-CASE 
-    # Neighbors = 0.1, Center = 0.05
-    # Ratio = 0.1 / 0.05 = 2.0 > 1.1576
-    # Expected: New = spacing_avg
-    fluid_system.particle_spacing .= 0.1
-    fluid_system.particle_spacing[center_idx] = 0.05
+        # min(max_spacing, C_r * Δs) = max_spacing
+        @test all(isapprox.(_particle_spacing, particle_spacing))
+        @test all(isapprox.(reference_mass, density * particle_spacing^2))
+    end
 
-    # We have 28 neighbors with spacing 0.1 and the center particle with spacing 0.05
-    spacing_avg = (0.05 + 28 * 0.1) / 29 
+    @testset "Coarsening of an Unfixed Region" begin
+        fill!(is_fixed, false)
+        _particle_spacing .= min_spacing
 
-    TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode, semi)
-    
-    @test isapprox(fluid_system.particle_spacing[center_idx], spacing_avg) 
+        TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode,
+                                               semi)
 
-    # Verify mass update
-    @test isapprox(fluid_system.cache.reference_mass[center_idx], density * fluid_system.particle_spacing[center_idx]^2)
+        # The global `max_spacing` caps the coarsening, not the neighborhood maximum
+        @test all(isapprox.(_particle_spacing, spacing_ratio * min_spacing))
+    end
 
+    @testset "Persistent Graded Band" begin
+        # Fix a strip of fine particles at the left, like the particles next to a boundary
+        fixed_strip = tank.fluid.coordinates[1, :] .< 0.3
+        n_fixed = count(fixed_strip)
+
+        fill!(is_fixed, false)
+        _particle_spacing .= particle_spacing
+        _particle_spacing[fixed_strip] .= min_spacing
+        is_fixed[fixed_strip] .= true
+
+        TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode,
+                                               semi)
+
+        # The fixed particles keep their spacing
+        @test all(_particle_spacing[fixed_strip] .== min_spacing)
+        @test all(reference_mass[fixed_strip] .≈ density * min_spacing^2)
+
+        n_refined_1 = count(<(particle_spacing), _particle_spacing)
+        @test n_fixed < n_refined_1 < n_fluid
+
+        # All refined particles are between the fixed spacing and `max_spacing`
+        @test all(min_spacing .<= _particle_spacing .<= particle_spacing)
+
+        # The spacing of the previous call is used, so the band grows
+        TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode,
+                                               semi)
+        n_refined_2 = count(<(particle_spacing), _particle_spacing)
+        @test n_refined_2 > n_refined_1
+        @test all(_particle_spacing[fixed_strip] .== min_spacing)
+    end
+
+    @testset "Geometric Mean" begin
+        # Neighbors with 0.1 and the center with 0.05: ratio 2 > C_r^3,
+        # so the geometric mean of the neighborhood is used.
+        fill!(is_fixed, false)
+        _particle_spacing .= particle_spacing
+        _particle_spacing[center] = min_spacing
+
+        _, _, spacing_avg = TrixiParticles.min_max_avg_spacing(fluid_system, semi, u_ode,
+                                                               tank.fluid.coordinates,
+                                                               center)
+
+        TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode,
+                                               semi)
+
+        @test _particle_spacing[center] ≈ spacing_avg
+        @test min_spacing < spacing_avg < particle_spacing
+
+        # With `n` neighbors (including the center), the geometric mean is
+        # `0.1 * 0.5^(1 / n)`, which is smaller than the arithmetic mean `0.1 - 0.05 / n`
+        n = round(Int, log(min_spacing / particle_spacing) /
+                       log(spacing_avg / particle_spacing))
+        @test spacing_avg ≈ particle_spacing * (min_spacing / particle_spacing)^(1 / n)
+        @test spacing_avg < particle_spacing - (particle_spacing - min_spacing) / n
     end
 end
