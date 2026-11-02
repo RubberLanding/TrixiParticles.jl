@@ -27,7 +27,7 @@ boundary_layers = 4
 # fully sampled.
 # Note: Due to the dynamics at the inlets and outlets of open boundaries,
 # it is recommended to use `open_boundary_layers > boundary_layers`
-open_boundary_layers = 6 * spacing_ratio * 2
+open_boundary_layers = 6 * spacing_ratio
 
 # ==========================================================================================
 # ==== Experiment Setup
@@ -149,7 +149,7 @@ function velocity_function2d(pos, t)
     return SVector(prescribed_velocity)
 end
 open_boundary_spacing = min_spacing
-open_boundary_model = BoundaryModelMirroringTafuni()
+open_boundary_model = BoundaryModelMirroringTafuni(; mirror_method=ZerothOrderMirroring())
 
 reference_velocity_in = velocity_function2d
 reference_pressure_in = nothing
