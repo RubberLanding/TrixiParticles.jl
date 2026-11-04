@@ -89,7 +89,7 @@ state_equation = nothing
 # ==== Refinement
 spatial_criterion = SpatialRefinementCriterion()
 inlet_logic = (system, particle, v, u,
-             semi) -> begin
+               semi) -> begin
     x_min = 0.0
     x_max = 0.15
     y_min = 0.0
@@ -98,13 +98,13 @@ inlet_logic = (system, particle, v, u,
     pos = TrixiParticles.current_coords(u, system, particle)
     if (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
         return min_spacing
-    else 
+    else
         return max_spacing
-    end 
+    end
 end
 
 outlet_logic = (system, particle, v, u,
-             semi) -> begin
+                semi) -> begin
     x_min = 0.85
     x_max = 1.0
     y_min = 0.0
@@ -113,9 +113,9 @@ outlet_logic = (system, particle, v, u,
     pos = TrixiParticles.current_coords(u, system, particle)
     if (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
         return min_spacing
-    else 
+    else
         return max_spacing
-    end 
+    end
 end
 
 inlet_criterion = SolutionRefinementCriterion(inlet_logic)
@@ -159,7 +159,8 @@ reference_density_in = fluid_density
 boundary_type_in = InFlow()
 face_in = ([0.0, 0.0], [0.0, domain_size[2]])
 inflow = BoundaryZone(; boundary_face=face_in, face_normal=flow_direction,
-                      open_boundary_layers, density=fluid_density, particle_spacing=open_boundary_spacing,
+                      open_boundary_layers, density=fluid_density,
+                      particle_spacing=open_boundary_spacing,
                       reference_density=reference_density_in,
                       reference_pressure=reference_pressure_in,
                       reference_velocity=reference_velocity_in,
@@ -171,7 +172,8 @@ reference_density_out = fluid_density
 boundary_type_out = OutFlow()
 face_out = ([min_coords_outlet[1], 0.0], [min_coords_outlet[1], domain_size[2]])
 outflow = BoundaryZone(; boundary_face=face_out, face_normal=(-flow_direction),
-                       open_boundary_layers, density=fluid_density, particle_spacing=open_boundary_spacing,
+                       open_boundary_layers, density=fluid_density,
+                       particle_spacing=open_boundary_spacing,
                        reference_density=reference_density_out,
                        reference_pressure=reference_pressure_out,
                        reference_velocity=reference_velocity_out,
@@ -252,7 +254,8 @@ end
 refinement_callback = DiscreteCallback(refinement_condition, apply_refinement!,
                                        save_positions=(false, false))
 
-callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback, refinement_callback)
+callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback,
+                        refinement_callback)
 
 sol = solve(ode, RDPK3SpFSAL35(),
             abstol=1e-5, # Default abstol is 1e-6 (may need to be tuned to prevent boundary penetration)

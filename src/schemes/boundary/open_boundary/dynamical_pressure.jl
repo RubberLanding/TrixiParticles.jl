@@ -73,7 +73,7 @@ end
     # Ensure mass matches the updated density and boundary particle volume
     boundary_zone = current_boundary_zone(system, particle)
     volume = boundary_zone.initial_condition.particle_spacing^ndims(system)
-    set_particle_mass!(system, particle, density[particle] * volume)
+    set_variable_particle_mass!(system, particle, density[particle] * volume)
 end
 
 @inline impose_rest_pressure!(v, system, particle, boundary_model) = v

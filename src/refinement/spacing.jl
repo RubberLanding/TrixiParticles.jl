@@ -20,7 +20,8 @@ end
 @inline function update_particle_spacing(fluid_system::AbstractFluidSystem, refinement,
                                          v_ode, u_ode, semi)
     (; spacing_ratio, max_spacing, reference_density) = refinement
-    (; _particle_spacing, _particle_spacing_tmp, reference_mass, is_fixed) = fluid_system.cache
+    (; _particle_spacing, _particle_spacing_tmp, reference_mass,
+     is_fixed) = fluid_system.cache
 
     NDIMS = ndims(fluid_system)
     spacing_ratio_3 = spacing_ratio^3

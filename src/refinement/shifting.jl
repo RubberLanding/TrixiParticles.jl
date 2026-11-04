@@ -13,7 +13,7 @@ end
                                   semi; max_iter=100, tol=2e-3)
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
-    
+
     # Store initial unshifted positions for the Taylor expansion
     u_initial = copy(u)
 
@@ -22,7 +22,8 @@ end
 
     for i in 1:max_iter
         compute_shifting_haftu!(system, refinement, v, u, v_ode, u_ode, semi)
-        max_raw_shift = apply_shift!(u, u_ode, system, semi; baseline_theta=0.5, theta_ratio=0.05)
+        max_raw_shift = apply_shift!(u, u_ode, system, semi; baseline_theta=0.5,
+                                     theta_ratio=0.05)
         max_raw_shift < tol && break
     end
 
@@ -42,8 +43,6 @@ end
 
     return system
 end
-
-
 
 @fastpow function compute_shifting_sun2017!(system, refinement, v, u, v_ode, u_ode, semi)
     (; cache, smoothing_kernel) = system
@@ -66,7 +65,7 @@ end
                                                  system_coords, neighbor_coords,
                                                  neighborhood_search, backend,
                                                  particle) do particle, neighbor,
-                                                              pos_diff, distance                
+                                                              pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 # rho_a = @inbounds current_density(v, system, particle)
                 # rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -82,7 +81,8 @@ end
                 Wdx = kernel(smoothing_kernel, dx_local, h_ab)
                 grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, h_ab)
 
-                delta_r_ = -h_ab^2 * (1 + (kernel_weight / Wdx)^4 * 2 / 10) * m_b / (rho_constant) * grad_kernel
+                delta_r_ = -h_ab^2 * (1 + (kernel_weight / Wdx)^4 * 2 / 10) * m_b /
+                           (rho_constant) * grad_kernel
                 for i in eachindex(delta_r_)
                     idx = linear_index_vector(i, particle, NDIMS)
                     @inbounds delta_v[idx] += delta_r_[i]
@@ -122,7 +122,7 @@ end
                                                  system_coords, neighbor_coords,
                                                  neighborhood_search, backend,
                                                  particle) do particle, neighbor,
-                                                              pos_diff, distance                
+                                                              pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 rho_a = @inbounds current_density(v, system, particle)
                 rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -180,7 +180,7 @@ end
                                                  system_coords, neighbor_coords,
                                                  neighborhood_search, backend,
                                                  particle) do particle, neighbor,
-                                                              pos_diff, distance                
+                                                              pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
                 h_a = smoothing_length(system, particle)
@@ -244,7 +244,7 @@ end
                                                  system_coords, neighbor_coords,
                                                  neighborhood_search, backend,
                                                  particle) do particle, neighbor,
-                                                              pos_diff, distance                
+                                                              pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
                 rho_a = @inbounds current_density(v, system, particle)
                 rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
@@ -314,7 +314,7 @@ end
                                                  system_coords, neighbor_coords,
                                                  neighborhood_search, backend,
                                                  particle) do particle, neighbor,
-                                                              pos_diff, distance                
+                                                              pos_diff, distance
                 m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
                 h_a = smoothing_length(system, particle)
@@ -403,7 +403,7 @@ function apply_shift!(u_system, u_ode, system, semi; baseline_theta=0.05, theta_
         proposed_shift = baseline_theta * shift_norm
         r_allowed = theta_ratio * h_i
         theta = proposed_shift > r_allowed ? (r_allowed / shift_norm) : baseline_theta
-        
+
         # Track the shift strictly as a percentage of the particle's own size
         @inbounds applied_shifts[particle] = shift_norm / h_i
 

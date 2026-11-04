@@ -366,7 +366,7 @@ if refine
                                                                                v_ode, u_ode,
                                                                                semi)
 
-                                            #    TrixiParticles.@autoinfiltrate
+                                               #    TrixiParticles.@autoinfiltrate
 
                                                # Move active particles to the start and inactive particles to the end
                                                TrixiParticles.compact_system!(system, v_ode,

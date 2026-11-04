@@ -57,7 +57,8 @@ function OpenBoundarySystem(boundary_model, initial_condition, fluid_system,
                             cache)
     OpenBoundarySystem{typeof(boundary_model), eltype(mass), ndims(initial_condition),
                        typeof(initial_condition), typeof(fluid_system),
-                       typeof(fluid_system_index), typeof(smoothing_kernel), typeof(smoothing_length), typeof(mass),
+                       typeof(fluid_system_index), typeof(smoothing_kernel),
+                       typeof(smoothing_length), typeof(mass),
                        typeof(boundary_candidates), typeof(fluid_candidates),
                        typeof(boundary_zone_indices), typeof(boundary_zone), typeof(buffer),
                        typeof(pressure_acceleration), typeof(shifting_technique),
@@ -382,8 +383,8 @@ function calculate_flow_rate!(system::OpenBoundarySystem{<:Any, ELTYPE, NDIMS},
         (; boundary_zones) = system
         (; boundary_zones_flow_rate) = system.cache
 
-        foreach_noalloc(boundary_zones,
-                        boundary_zones_flow_rate) do (boundary_zone, flow_rate)
+        foreach_noalloc_zip(boundary_zones,
+                            boundary_zones_flow_rate) do (boundary_zone, flow_rate)
             (; face_normal) = boundary_zone
             (; sample_velocity, area_increment) = boundary_zone.cache
 
@@ -570,7 +571,7 @@ end
 
     # Transfer mass
     mass = hydrodynamic_mass(system_old, particle_old)
-    set_particle_mass!(system_new, particle_new, mass)
+    set_variable_particle_mass!(system_new, particle_new, mass)
 
     # Transfer smoothing length
     h = smoothing_length(system_old, particle_old)
@@ -711,11 +712,18 @@ function interpolate_velocity!(system::OpenBoundarySystem, boundary_zone,
 
     # Shepard-normalized interpolation:
     #   v(p) = (Σ_b v_b V_b W_pb) / (Σ_b V_b W_pb)
-    foreach_system(semi) do neighbor_system
-        use_open_boundary_interpolation_neighbor(neighbor_system) || return neighbor_system
+    foreach_system_wrapped(semi, v_ode,
+                           u_ode) do neighbor_system, v_neighbor, u_neighbor
+        if !use_open_boundary_interpolation_neighbor(neighbor_system)
+            # Not a valid interpolation neighbor, ignore this system.
+            return
+        end
 
-        v_neighbor = wrap_v(v_ode, neighbor_system, semi)
-        u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+        if !has_system_interaction(system, neighbor_system, semi)
+            # No interaction between these systems.
+            return
+        end
+
         neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
 
         # We can do this because we require the neighborhood search to support querying neighbors

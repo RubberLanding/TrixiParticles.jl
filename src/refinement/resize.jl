@@ -189,27 +189,42 @@ end
 end
 
 function resize_semi!(semi::Semidiscretization)
-    (; systems, neighborhood_searches) = semi
+    resize_neighborhood_searches!(semi.neighborhood_search_handler, semi)
 
-    for system in systems
-        for neighbor_system in systems
+    return semi
+end
 
-            # Bypass `get_neighborhood_search` for TLSPH.
-            # We do not refine TLSPH and do not want to modify its `self_interaction_nhs`.
-            # Instead we take the nhs stored in the semidiscretization and resize it. 
-            system_index = system_indices(system, semi)
-            neighbor_index = system_indices(neighbor_system, semi)
+function resize_neighborhood_searches!(handler::PairsNHSHandler, semi)
+    (; neighborhood_searches) = handler
+    (; systems) = semi
 
-            old_nhs = neighborhood_searches[system_index, neighbor_index]
-            n_new = nparticles(neighbor_system)
-            neighborhood_searches[system_index,
-                                  neighbor_index] = copy_neighborhood_search(old_nhs,
-                                                                             old_nhs.search_radius,
-                                                                             n_new)
+    # Read directly from the handler instead of using `get_neighborhood_search`,
+    # which returns the `self_interaction_nhs` for TLSPH self-interaction.
+    for (neighbor_index, neighbor) in pairs(systems), system_index in eachindex(systems)
+        nhs = neighborhood_searches[system_index, neighbor_index]
+        neighborhood_searches[system_index,
+                              neighbor_index] = copy_neighborhood_search(nhs,
+                                                                         nhs.search_radius,
+                                                                         nparticles(neighbor))
+    end
+
+    return handler
+end
+
+function resize_neighborhood_searches!(handler::SharedNHSHandler, semi)
+    (; systems) = semi
+
+    for (neighbor_index, neighbor) in pairs(systems)
+        searches = handler.neighborhood_searches[neighbor_index]
+
+        for radius_index in eachindex(searches)
+            nhs = searches[radius_index]
+            searches[radius_index] = copy_neighborhood_search(nhs, nhs.search_radius,
+                                                              nparticles(neighbor))
         end
     end
 
-    return semi
+    return handler
 end
 
 function reinitialize_neighborhood_searches!(semi, u_ode)

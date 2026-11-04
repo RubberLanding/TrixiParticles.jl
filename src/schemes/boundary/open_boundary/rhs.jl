@@ -36,12 +36,13 @@ function interact!(dv, v_particle_system, u_particle_system,
 
             h_a = smoothing_length(particle_system, particle)
             h_b = smoothing_length(neighbor_system, neighbor)
-            h_ab = 0.5 * (h_a + h_b)
+            h_ab = (h_a + h_b) / 2
 
             # Now that we know that `distance` is not zero, we can safely call the unsafe
             # version of the kernel gradient to avoid redundant zero checks.
-            grad_kernel = kernel_grad(particle_system_kernel, pos_diff, distance, h_ab)
-            
+            grad_kernel = kernel_grad_unsafe(particle_system_kernel, pos_diff, distance,
+                                             h_ab)
+
             # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
             # in bounds of the respective system. For performance reasons, we use `@inbounds`
             # in this hot loop to avoid bounds checking when extracting particle quantities.
@@ -68,17 +69,17 @@ function interact!(dv, v_particle_system, u_particle_system,
             dv_pressure_boundary = 2 * p_boundary * (m_b / (rho_a * rho_b)) * grad_kernel
 
             # Propagate `@inbounds` to the viscosity function, which accesses particle data
-            dv_viscosity_ = Ref(zero(pos_diff))
-            @inbounds dv_viscosity!(dv_viscosity_,
-                                    viscosity_model(fluid_system,
-                                                    neighbor_system),
-                                    particle_system, neighbor_system,
-                                    v_particle_system, v_neighbor_system,
-                                    particle, neighbor, pos_diff, distance,
-                                    sound_speed, m_a, m_b, rho_a, rho_b,
-                                    v_a, v_b, grad_kernel)
+            dv_viscosity_ = @inbounds add_dv_viscosity(zero(pos_diff),
+                                                       viscosity_model(fluid_system,
+                                                                       neighbor_system),
+                                                       particle_system, neighbor_system,
+                                                       v_particle_system, v_neighbor_system,
+                                                       particle, neighbor, pos_diff,
+                                                       distance,
+                                                       sound_speed, m_a, m_b, rho_a, rho_b,
+                                                       v_a, v_b, grad_kernel)
 
-            dv_particle = dv_pressure + dv_viscosity_[] + dv_pressure_boundary
+            dv_particle = dv_pressure + dv_viscosity_ + dv_pressure_boundary
 
             for i in 1:ndims(particle_system)
                 @inbounds dv[i, particle] += dv_particle[i]
@@ -89,12 +90,14 @@ function interact!(dv, v_particle_system, u_particle_system,
             v_diff = v_a - v_b
 
             # Propagate `@inbounds` to the continuity equation, which accesses particle data
-            drho_particle = Ref(zero(rho_a))
-            @inbounds continuity_equation!(drho_particle,
-                                        particle_system, neighbor_system,
-                                        particle, neighbor, pos_diff, distance,
-                                        m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
-            dv[end, particle] += drho_particle[]
+            drho_particle = @inbounds add_continuity_equation(zero(rho_a),
+                                                              particle_system,
+                                                              neighbor_system,
+                                                              particle, neighbor, pos_diff,
+                                                              distance, m_b, rho_a, rho_b,
+                                                              v_a, v_b,
+                                                              grad_kernel)
+            dv[end, particle] += drho_particle
 
             # Open boundary pressure evolution matches the corresponding fluid system:
             # - EDAC: Compute pressure evolution like the fluid system

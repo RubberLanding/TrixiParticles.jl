@@ -65,8 +65,8 @@ end
 end
 
 @inline function each_active_particle(system::AbstractFluidSystem, ::Nothing)
-    return Base.OneTo(nparticles(system))    
-end 
+    return Base.OneTo(nparticles(system))
+end
 
 @inline function each_active_particle(system::AbstractFluidSystem, buffer)
     return each_active_particle(system, system.particle_refinement, buffer)

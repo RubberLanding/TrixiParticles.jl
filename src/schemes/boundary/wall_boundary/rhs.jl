@@ -62,11 +62,12 @@ function interact!(dv, v_particle_system, u_particle_system,
         v_a = current_velocity(v_particle_system, particle_system, particle)
         v_b = current_velocity(v_neighbor_system, neighbor_system, neighbor)
 
-        drho_particle = Ref(zero(rho_a))
-        continuity_equation!(drho_particle, density_calculator(neighbor_system),
-                             m_b, rho_a, rho_b, v_a, v_b, grad_kernel, particle)
+        drho_particle = add_continuity_equation(zero(rho_a),
+                                                density_calculator(neighbor_system),
+                                                m_b, rho_a, rho_b, v_a, v_b,
+                                                grad_kernel, particle)
 
-        dv[end, particle] += drho_particle[]
+        dv[end, particle] += drho_particle
     end
 
     return dv
@@ -89,10 +90,15 @@ function interact!(dv, v_particle_system, u_particle_system,
     almostzero = sqrt(eps(h_w^2))
 
     # Loop over all pairs of particles and neighbors within the kernel cutoff.
-    foreach_symmetric_point_neighbor(neighbor_system, system, neighbor_coords, system_coords, semi;
+    foreach_symmetric_point_neighbor(neighbor_system, particle_system, neighbor_coords,
+                                     system_coords, semi;
                                      points=each_integrated_particle(neighbor_system),
-                                     parallelization_backend=SerialBackend()) do neighbor, particle,
-                                                                                 pos_diff, distance
+                                     parallelization_backend=SerialBackend()) do neighbor,
+                                                                                 particle,
+                                                                                 pos_diff,
+                                                                                 distance
+        # Since neighbor and particle are switched
+        pos_diff = -pos_diff
 
         # Guard against zero distance
         skip_zero_distance(particle_system) && distance < almostzero && return
@@ -101,12 +107,11 @@ function interact!(dv, v_particle_system, u_particle_system,
         h_f = smoothing_length(neighbor_system, neighbor)
 
         # Variable smoothing length (Eq. 19, Haftu et al.)
-        h_wf = 0.5 * (h_w + h_f)
+        h_wf = (h_w + h_f) / 2
 
-        # Now that we know that `distance` is not zero, we can safely call the unsafe
-        # version of the kernel gradient to avoid redundant zero checks.
-        grad_kernel = kernel_grad_unsafe(boundary_model.smoothing_kernel, pos_diff,
-                                         distance, h_wf)
+        # Pairs up to the larger of both compact supports reach this point, so we need
+        # the safe version here, which is zero outside the compact support of `h_wf`.
+        grad_kernel = kernel_grad(boundary_model.smoothing_kernel, pos_diff, distance, h_wf)
 
         m_b = hydrodynamic_mass(neighbor_system, neighbor)
 
@@ -116,11 +121,12 @@ function interact!(dv, v_particle_system, u_particle_system,
         v_a = current_velocity(v_particle_system, particle_system, particle)
         v_b = current_velocity(v_neighbor_system, neighbor_system, neighbor)
 
-        drho_particle = Ref(zero(rho_a))
-        continuity_equation!(drho_particle, density_calculator(neighbor_system),
-                             m_b, rho_a, rho_b, v_a, v_b, grad_kernel, particle)
+        drho_particle = add_continuity_equation(zero(rho_a),
+                                                density_calculator(neighbor_system),
+                                                m_b, rho_a, rho_b, v_a, v_b,
+                                                grad_kernel, particle)
 
-        dv[end, particle] += drho_particle[]
+        dv[end, particle] += drho_particle
     end
 
     return dv
@@ -129,19 +135,17 @@ end
 # This is the derivative of the density summation, which is compatible with the
 # `SummationDensity` pressure acceleration.
 # Energy preservation tests will fail with the other formulation.
-@propagate_inbounds function continuity_equation!(drho_particle, ::SummationDensity,
-                                                  m_b, rho_a, rho_b, v_a, v_b,
-                                                  grad_kernel, particle)
-    drho_particle[] += m_b * dot(v_a - v_b, grad_kernel)
-
-    return drho_particle
+@propagate_inbounds function add_continuity_equation(drho_particle,
+                                                     ::SummationDensity,
+                                                     m_b, rho_a, rho_b, v_a, v_b,
+                                                     grad_kernel, particle)
+    return drho_particle + m_b * dot(v_a - v_b, grad_kernel)
 end
 
 # This is identical to the continuity equation of the fluid
-@propagate_inbounds function continuity_equation!(drho_particle, ::ContinuityDensity,
-                                                  m_b, rho_a, rho_b, v_a, v_b,
-                                                  grad_kernel, particle)
-    drho_particle[] += rho_a / rho_b * m_b * dot(v_a - v_b, grad_kernel)
-
-    return drho_particle
+@propagate_inbounds function add_continuity_equation(drho_particle,
+                                                     ::ContinuityDensity,
+                                                     m_b, rho_a, rho_b, v_a, v_b,
+                                                     grad_kernel, particle)
+    return drho_particle + rho_a / rho_b * m_b * dot(v_a - v_b, grad_kernel)
 end

@@ -107,9 +107,10 @@
         _particle_spacing .= particle_spacing
         _particle_spacing[center] = min_spacing
 
-        _, _, spacing_avg = TrixiParticles.min_max_avg_spacing(fluid_system, semi, u_ode,
-                                                               tank.fluid.coordinates,
-                                                               center)
+        _, _,
+        spacing_avg = TrixiParticles.min_max_avg_spacing(fluid_system, semi, u_ode,
+                                                         tank.fluid.coordinates,
+                                                         center)
 
         TrixiParticles.update_particle_spacing(fluid_system, refinement, v_ode, u_ode,
                                                semi)
@@ -119,8 +120,9 @@
 
         # With `n` neighbors (including the center), the geometric mean is
         # `0.1 * 0.5^(1 / n)`, which is smaller than the arithmetic mean `0.1 - 0.05 / n`
-        n = round(Int, log(min_spacing / particle_spacing) /
-                       log(spacing_avg / particle_spacing))
+        n = round(Int,
+                  log(min_spacing / particle_spacing) /
+                  log(spacing_avg / particle_spacing))
         @test spacing_avg ≈ particle_spacing * (min_spacing / particle_spacing)^(1 / n)
         @test spacing_avg < particle_spacing - (particle_spacing - min_spacing) / n
     end

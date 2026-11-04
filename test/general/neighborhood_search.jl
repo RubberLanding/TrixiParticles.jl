@@ -5,6 +5,8 @@
 
     TrixiParticles.nparticles(system::MockSystemOutOfBounds) = length(system.buffer.active_particle)
     Base.eltype(system::MockSystemOutOfBounds) = Float64
+    TrixiParticles.wrap_u(u_ode, ::MockSystemOutOfBounds, ::DummySemidiscretization) = u_ode
+    TrixiParticles.wrap_v(v_ode, ::MockSystemOutOfBounds, ::DummySemidiscretization) = v_ode
 
     @testset "Particles Inside Bounds" begin
         # Setup: 5 particles, all inside bounds
@@ -17,7 +19,7 @@
         cell_list = TrixiParticles.FullGridCellList(; min_corner=(-1.0, -1.0),
                                                     max_corner=(1.0, 1.0),
                                                     search_radius=0.1)
-        dummy_nhs = (; cell_size=0.1, periodic_box=nothing, cell_list)
+        dummy_nhs = (; cell_size=0.1, n_cells=0, periodic_box=nothing, cell_list)
         semi = DummySemidiscretization()
 
         # All particles should remain active
@@ -39,7 +41,7 @@
         cell_list = TrixiParticles.FullGridCellList(; min_corner=(-1.0, -1.0),
                                                     max_corner=(1.0, 1.0),
                                                     search_radius=0.1)
-        dummy_nhs = (; cell_size=0.1, periodic_box=nothing, cell_list)
+        dummy_nhs = (; cell_size=0.1, n_cells=0, periodic_box=nothing, cell_list)
         semi = DummySemidiscretization()
 
         TrixiParticles.deactivate_out_of_bounds_particles!(system, buffer, dummy_nhs,
@@ -68,7 +70,7 @@
         cell_list = TrixiParticles.FullGridCellList(; min_corner=(-1.0, -1.0),
                                                     max_corner=(1.0, 1.0),
                                                     search_radius=0.1)
-        dummy_nhs = (; cell_size=0.1, periodic_box=nothing, cell_list)
+        dummy_nhs = (; cell_size=0.1, n_cells=0, periodic_box=nothing, cell_list)
         semi = DummySemidiscretization()
 
         TrixiParticles.deactivate_out_of_bounds_particles!(system, buffer, dummy_nhs,

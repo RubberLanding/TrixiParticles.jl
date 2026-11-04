@@ -119,7 +119,6 @@ end
 end
 
 @inline function current_acceleration(system, particle)
-    # TODO: Return `dv` of solid particles
     return zero(SVector{ndims(system), eltype(system)})
 end
 
@@ -202,7 +201,7 @@ end
     return initial_smoothing_length(system, Val(has_variable_smoothing_length(system)))
 end
 
-@inline initial_smoothing_length(system, ::Val{false}) = smoothing_length(system)
+@inline initial_smoothing_length(system, ::Val{false}) = smoothing_length(system, nothing)
 
 @inline function initial_smoothing_length(system, ::Val{true})
     return spacing_to_smoothing_length(system, system.initial_condition.particle_spacing)
@@ -230,6 +229,21 @@ end
     return system
 end
 
+# Particle masses are only allowed to change when using refinement.
+# Otherwise, they are constant and don't need to be restored when restarting a simulation.
+@inline function set_variable_particle_mass!(system, particle, mass)
+    set_variable_particle_mass!(system, Val(has_variable_smoothing_length(system)),
+                                particle, mass)
+end
+
+@inline set_variable_particle_mass!(system, ::Val{false}, particle, mass) = system
+
+@inline function set_variable_particle_mass!(system, ::Val{true}, particle, mass)
+    set_particle_mass!(system, particle, mass)
+
+    return system
+end
+
 @inline system_smoothing_kernel(system) = system.smoothing_kernel
 @inline system_correction(system) = nothing
 
@@ -237,7 +251,8 @@ end
     return particle_spacing(system, get_refinement(system), particle)
 end
 
-@inline particle_spacing(system, ::Nothing, particle) = system.initial_condition.particle_spacing
+@inline particle_spacing(system, ::Nothing,
+                         particle) = system.initial_condition.particle_spacing
 
 # Assuming a constant particle spacing one can calculate the number of neighbors within the
 # compact support for an undisturbed particle distribution.

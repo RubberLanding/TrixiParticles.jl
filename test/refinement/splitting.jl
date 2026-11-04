@@ -94,7 +94,8 @@ using Test
 
     @testset "Test `apply_splitting!`" begin
         for (idx, particle) in enumerate(test_indices)
-            expected_mass = old_masses[idx] / TrixiParticles.nchilds(refinement.splitting_pattern)
+            expected_mass = old_masses[idx] /
+                            TrixiParticles.nchilds(refinement.splitting_pattern)
             expected_h = old_h[idx] * refinement.splitting_pattern.alpha
 
             @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system, particle),

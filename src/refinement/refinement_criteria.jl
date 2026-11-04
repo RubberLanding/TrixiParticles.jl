@@ -80,9 +80,9 @@ end
 
     @threaded semi for fluid_particle in eachparticle(fluid_system)
         @inbounds foreach_symmetric_neighbor(fluid_system, neighbor_system,
-                                            fluid_coords, neighbor_coords,
-                                            neighborhood_search, backend,
-                                            fluid_particle) do fluid_particle, _, _, _
+                                             fluid_coords, neighbor_coords,
+                                             neighborhood_search, backend,
+                                             fluid_particle) do fluid_particle, _, _, _
             # The first boundary in this call overwrites the spacing of the previous call,
             # further boundaries can only decrease it.
             if is_fixed[fluid_particle]

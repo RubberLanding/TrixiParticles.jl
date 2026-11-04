@@ -145,29 +145,31 @@ function compute_density!(system, u, u_ode, semi, ::SummationDensity)
 end
 
 # With 'SummationDensity', density is calculated in wcsph/system.jl:compute_density!
-@inline function continuity_equation!(drho_particle, ::SummationDensity,
-                                      particle_system, neighbor_system,
-                                      particle, neighbor, pos_diff, distance,
-                                      m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
+@inline function add_continuity_equation(drho_particle, ::SummationDensity,
+                                         particle_system, neighbor_system,
+                                         particle, neighbor, pos_diff, distance,
+                                         m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
     return drho_particle
 end
 
 # This formulation was chosen to be consistent with the used pressure_acceleration formulations
-@propagate_inbounds function continuity_equation!(drho_particle,
-                                                  ::ContinuityDensity,
-                                                  particle_system::AbstractFluidSystem,
-                                                  neighbor_system,
-                                                  particle, neighbor, pos_diff, distance,
-                                                  m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
-    continuity_equation!(drho_particle, particle_system, neighbor_system,
-                         particle, neighbor, pos_diff, distance,
-                         m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
+@propagate_inbounds function add_continuity_equation(drho_particle,
+                                                     ::ContinuityDensity,
+                                                     particle_system::AbstractFluidSystem,
+                                                     neighbor_system,
+                                                     particle, neighbor, pos_diff,
+                                                     distance, m_b, rho_a, rho_b, v_a, v_b,
+                                                     grad_kernel)
+    add_continuity_equation(drho_particle, particle_system, neighbor_system,
+                            particle, neighbor, pos_diff, distance,
+                            m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
 end
 
-@propagate_inbounds function continuity_equation!(drho_particle,
-                                                  particle_system, neighbor_system,
-                                                  particle, neighbor, pos_diff, distance,
-                                                  m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
+@propagate_inbounds function add_continuity_equation(drho_particle,
+                                                     particle_system, neighbor_system,
+                                                     particle, neighbor, pos_diff,
+                                                     distance, m_b, rho_a, rho_b, v_a, v_b,
+                                                     grad_kernel)
     v_diff = v_a - v_b
 
     v_diff = continuity_equation_shifting_term(v_diff,
@@ -178,15 +180,17 @@ end
     # Since this is one of the most performance critical functions, using fast divisions
     # here gives a significant speedup on GPUs.
     # See the docs page "Development" for more details on `div_fast`.
-    drho_particle[] += div_fast(rho_a, rho_b) * m_b * dot(v_diff, grad_kernel)
+    drho_particle += div_fast(rho_a, rho_b) * m_b * dot(v_diff, grad_kernel)
 
     # Artificial density diffusion should only be applied to systems representing a fluid
     # with the same physical properties i.e. density and viscosity.
     # TODO: shouldn't be applied to particles on the interface (depends on PR #539)
     if particle_system === neighbor_system
-        density_diffusion!(drho_particle, density_diffusion(particle_system),
-                           particle_system, particle, neighbor,
-                           pos_diff, distance, m_b, rho_a, rho_b, grad_kernel)
+        drho_particle = add_density_diffusion(drho_particle,
+                                              density_diffusion(particle_system),
+                                              particle_system, particle, neighbor,
+                                              pos_diff, distance, m_b, rho_a, rho_b,
+                                              grad_kernel)
     end
 
     return drho_particle
@@ -198,7 +202,7 @@ end
 
 @propagate_inbounds function write_drho_particle!(dv, ::ContinuityDensity,
                                                   drho_particle, particle)
-    dv[end, particle] += drho_particle[]
+    dv[end, particle] += drho_particle
 
     return dv
 end
@@ -209,9 +213,9 @@ function calculate_dt(v_ode, u_ode, cfl_number, system::AbstractFluidSystem, sem
     # TODO variable smoothing length
     smoothing_length_ = initial_smoothing_length(system)
 
-    dt_viscosity = 0.125 * smoothing_length_^2
+    dt_viscosity = Inf
     if !isnothing(system.viscosity)
-        dt_viscosity = dt_viscosity /
+        dt_viscosity = 0.125 * smoothing_length_^2 /
                        kinematic_viscosity(system, viscosity, smoothing_length_,
                                            system_sound_speed(system))
     end
@@ -233,6 +237,7 @@ function calculate_dt(v_ode, u_ode, cfl_number, system::AbstractFluidSystem, sem
 
     # Eq. 28 in Morris (2000)
     dt = min(dt_viscosity, dt_acceleration, dt_sound_speed)
+
     if surface_tension isa SurfaceTensionMorris ||
        surface_tension isa SurfaceTensionMomentumMorris
         v = wrap_v(v_ode, system, semi)
@@ -242,6 +247,20 @@ function calculate_dt(v_ode, u_ode, cfl_number, system::AbstractFluidSystem, sem
     end
 
     return dt
+end
+
+@inline function calculate_interface_dt(v_ode, u_ode, cfl_number,
+                                        system::AbstractFluidSystem,
+                                        neighbor_system::AbstractFluidSystem,
+                                        semi)
+    return calculate_interface_dt(v_ode, u_ode, cfl_number, system, neighbor_system, semi,
+                                  surface_tension_model(system),
+                                  surface_tension_model(neighbor_system))
+end
+
+@inline function calculate_interface_dt(v_ode, u_ode, cfl_number, system, neighbor_system,
+                                        semi, surface_tension, neighbor_surface_tension)
+    return Inf
 end
 
 @inline function surface_tension_model(system::AbstractFluidSystem)
@@ -339,6 +358,49 @@ end
 
 @inline function has_variable_smoothing_length(system::AbstractFluidSystem)
     return !isnothing(get_refinement(system))
+end
+
+# Without refinement, both particles use the regular (possibly corrected) kernel gradient
+@inline function kernel_grads_ab(particle_system, neighbor_system, ::Nothing,
+                                 pos_diff, distance, particle, neighbor)
+    # Now that we know that `distance` is not zero, we can safely call the unsafe
+    # version of the kernel gradient to avoid redundant zero checks.
+    grad_kernel = smoothing_kernel_grad_unsafe(particle_system, pos_diff,
+                                               distance, particle)
+
+    return grad_kernel, grad_kernel
+end
+
+# With refinement, each particle uses its own smoothing length (Haftu et al.).
+# Pairs up to the larger of both compact supports reach this point, so we need the safe
+# version here, which is zero outside the compact support of each kernel.
+@inline function kernel_grads_ab(particle_system, neighbor_system, refinement,
+                                 pos_diff, distance, particle, neighbor)
+    kernel = system_smoothing_kernel(particle_system)
+    h_a = smoothing_length(particle_system, particle)
+    h_b = smoothing_length(neighbor_system, neighbor)
+
+    return kernel_grad(kernel, pos_diff, distance, h_a),
+           kernel_grad(kernel, pos_diff, distance, h_b)
+end
+
+# Kernel gradient shared by both particles of a pair
+@inline function symmetric_kernel_grad(particle_system, neighbor_system, ::Nothing,
+                                       pos_diff, distance, particle, neighbor)
+    # Now that we know that `distance` is not zero, we can safely call the unsafe
+    # version of the kernel gradient to avoid redundant zero checks.
+    return smoothing_kernel_grad_unsafe(particle_system, pos_diff, distance, particle)
+end
+
+# With refinement, the average of both gradients keeps the pair interaction antisymmetric
+@inline function symmetric_kernel_grad(particle_system, neighbor_system, refinement,
+                                       pos_diff, distance, particle, neighbor)
+    grad_kernel_a,
+    grad_kernel_b = kernel_grads_ab(particle_system, neighbor_system,
+                                    refinement, pos_diff, distance,
+                                    particle, neighbor)
+
+    return (grad_kernel_a + grad_kernel_b) / 2
 end
 
 include("pressure_acceleration.jl")

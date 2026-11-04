@@ -3,8 +3,8 @@ function interact!(dv, v_particle_system, u_particle_system,
                    v_neighbor_system, u_neighbor_system,
                    particle_system::EntropicallyDampedSPHSystem,
                    neighbor_system, semi)
-    (; sound_speed, density_calculator, correction, nu_edac, particle_refinement,
-     smoothing_kernel) = particle_system
+    (; sound_speed, density_calculator, correction, nu_edac,
+     particle_refinement) = particle_system
 
     system_coords = current_coordinates(u_particle_system, particle_system)
     neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
@@ -32,10 +32,10 @@ function interact!(dv, v_particle_system, u_particle_system,
         # Note that `return` only exits the closure, i.e., skips the current neighbor.
         skip_zero_distance(particle_system) && distance < almostzero && return
 
-        # Now that we know that `distance` is not zero, we can safely call the unsafe
-        # version of the kernel gradient to avoid redundant zero checks.
-        grad_kernel = smoothing_kernel_grad_unsafe(particle_system, pos_diff,
-                                                   distance, particle)
+        grad_kernel_a,
+        grad_kernel_b = kernel_grads_ab(particle_system, neighbor_system,
+                                        particle_refinement, pos_diff,
+                                        distance, particle, neighbor)
 
         # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
         # in bounds of the respective system. For performance reasons, we use `@inbounds`
@@ -58,20 +58,10 @@ function interact!(dv, v_particle_system, u_particle_system,
         m_a = @inbounds hydrodynamic_mass(particle_system, particle)
         m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
-        # Formulation by Haftu et al. adapts EDAC equations for variable smoothing lengths
-        h_a = smoothing_length(particle_system, particle)
-        h_b = smoothing_length(neighbor_system, neighbor)
-
-        # TODO: Look how do extract the kernel grad the most performant way
-        grad_kernel_a = kernel_grad(smoothing_kernel, pos_diff, distance, h_a)
-        grad_kernel_b = kernel_grad(smoothing_kernel, pos_diff, distance, h_b)
-
         beta_a = get_beta(particle_system, particle, particle_refinement)
-        beta_a = abs(beta_a) < eps() ? 1.0 : beta_a
-        beta_a_inv = 1.0 / beta_a
+        beta_a_inv = inv(beta_a)
 
         beta_b = get_beta(neighbor_system, neighbor, get_refinement(neighbor_system))
-        beta_b = abs(beta_b) < eps() ? 1.0 : beta_b
 
         dv_pressure, P_a,
         P_b = evaluate_pressure_terms(particle_system, neighbor_system,
@@ -81,35 +71,39 @@ function interact!(dv, v_particle_system, u_particle_system,
                                       beta_a, beta_b,
                                       particle_refinement)
 
-        # TrixiParticles.@autoinfiltrate
-
-        dv_particle = Ref(dv_pressure)
-        @inbounds TrixiParticles.dv_shifting!(dv_particle,
-                                              shifting_technique(particle_system),
-                                              particle_system, neighbor_system,
-                                              v_particle_system, v_neighbor_system,
-                                              particle, neighbor, m_a, m_b, rho_a, rho_b,
-                                              v_a, v_b,
-                                              pos_diff, distance,
-                                              grad_kernel_a, correction)
-        # TrixiParticles.@autoinfiltrate
-
         grad_kernel_avg = (grad_kernel_a + grad_kernel_b) / 2
-        @inbounds dv_viscosity!(dv_particle, particle_refinement, particle_system,
-                                neighbor_system,
-                                v_particle_system, v_neighbor_system,
-                                particle, neighbor, pos_diff, distance,
-                                sound_speed, m_a, m_b, rho_a, rho_b,
-                                v_a, v_b, grad_kernel_a, grad_kernel_avg, beta_a_inv)
-        # TrixiParticles.@autoinfiltrate
+        dv_particle = @inbounds add_dv_viscosity(dv_pressure, particle_refinement,
+                                                 particle_system,
+                                                 neighbor_system,
+                                                 v_particle_system, v_neighbor_system,
+                                                 particle, neighbor, pos_diff, distance,
+                                                 sound_speed, m_a, m_b, rho_a, rho_b,
+                                                 v_a, v_b, grad_kernel_a, grad_kernel_avg,
+                                                 beta_a_inv)
 
-        @inbounds adhesion_force!(dv_particle, surface_tension_a, particle_system,
-                                  neighbor_system,
-                                  particle, neighbor, pos_diff, distance)
-        # TrixiParticles.@autoinfiltrate
+        # Extra terms in the momentum equation when using a shifting technique
+        dv_particle = @inbounds add_dv_shifting(dv_particle,
+                                                shifting_technique(particle_system),
+                                                particle_system, neighbor_system,
+                                                v_particle_system, v_neighbor_system,
+                                                particle, neighbor, m_a, m_b, rho_a, rho_b,
+                                                v_a, v_b,
+                                                pos_diff, distance, grad_kernel_a,
+                                                correction)
+
+        dv_particle = @inbounds add_dv_surface_tension(dv_particle,
+                                                       surface_tension_a, surface_tension_b,
+                                                       particle_system, neighbor_system,
+                                                       particle, neighbor,
+                                                       pos_diff, distance,
+                                                       rho_a, rho_b, grad_kernel_a, 1)
+
+        dv_particle = @inbounds add_dv_adhesion(dv_particle, surface_tension_a,
+                                                particle_system, neighbor_system,
+                                                particle, neighbor, pos_diff, distance)
 
         for i in 1:ndims(particle_system)
-            @inbounds dv[i, particle] += dv_particle[][i]
+            @inbounds dv[i, particle] += dv_particle[i]
         end
 
         u_shift_a = delta_v(particle_system, particle)
@@ -118,20 +112,19 @@ function interact!(dv, v_particle_system, u_particle_system,
 
         pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
                             particle, neighbor, pos_diff, distance,
-                            sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b, nu_edac, P_a,
-                            P_b,
-                            grad_kernel_a, grad_kernel_b, beta_a_inv, u_shift_a,
-                            particle_refinement)
-        drho_particle = Ref(zero(rho_a))
-        # TrixiParticles.@autoinfiltrate
+                            sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b, nu_edac,
+                            P_a, P_b, grad_kernel_a, grad_kernel_b, beta_a_inv,
+                            u_shift_a, particle_refinement)
+
+        drho_particle = zero(rho_a)
 
         # TODO If variable smoothing_length is used, this should use the neighbor smoothing length
         # Propagate `@inbounds` to the continuity equation, which accesses particle data
-        @inbounds continuity_equation!(drho_particle, density_calculator,
-                                       particle_system, neighbor_system,
-                                       particle, neighbor, pos_diff, distance,
-                                       m_b, rho_a, rho_b, v_a, v_b, grad_kernel)
-        # TrixiParticles.@autoinfiltrate
+        drho_particle = @inbounds add_continuity_equation(drho_particle, density_calculator,
+                                                          particle_system, neighbor_system,
+                                                          particle, neighbor, pos_diff,
+                                                          distance, m_b, rho_a, rho_b,
+                                                          v_a, v_b, grad_kernel_a)
 
         @inbounds write_drho_particle!(dv, density_calculator, drho_particle, particle)
     end
@@ -241,19 +234,16 @@ end
                                          distance,
                                          grad_kernel_a, grad_kernel_b, beta_a, beta_b,
                                          refinement::Nothing)
+    p_avg = average_pressure(particle_system, particle)
 
     # Delegate to standard TrixiParticles architecture
     correction = system_correction(particle_system)
     dv_pressure = pressure_acceleration(particle_system, neighbor_system, particle,
                                         neighbor,
-                                        m_a, m_b, p_a, p_b, rho_a, rho_b, pos_diff,
-                                        distance,
-                                        grad_kernel_a, correction)
+                                        m_a, m_b, p_a - p_avg, p_b - p_avg, rho_a, rho_b,
+                                        pos_diff, distance, grad_kernel_a, correction)
 
     # Compute unscaled P_a and P_b for pressure_evolution
-    p_avg = average_pressure(particle_system, particle)
-    # p_avg_b = average_pressure(neighbor_system, neighbor)
-
     P_a = (p_a - p_avg) / rho_a^2
     P_b = (p_b - p_avg) / rho_b^2
 

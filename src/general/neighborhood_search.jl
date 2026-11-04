@@ -2,11 +2,11 @@
 # Loop over all pairs of particles and neighbors within the kernel cutoff.
 # `f(particle, neighbor, pos_diff, distance)` is called for every particle-neighbor pair.
 # By default, loop over `eachparticle(system)`.
-function PointNeighbors.foreach_point_neighbor(f, system::AbstractSystem,
-                                               neighbor_system::AbstractSystem,
-                                               system_coords, neighbor_coords, semi;
-                                               points=eachparticle(system),
-                                               parallelization_backend=semi.parallelization_backend)
+@inline function PointNeighbors.foreach_point_neighbor(f, system::AbstractSystem,
+                                                       neighbor_system::AbstractSystem,
+                                                       system_coords, neighbor_coords, semi;
+                                                       points=eachparticle(system),
+                                                       parallelization_backend=semi.parallelization_backend)
     neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
     foreach_point_neighbor(f, system_coords, neighbor_coords, neighborhood_search;
                            points, parallelization_backend)
@@ -15,16 +15,20 @@ end
 deactivate_out_of_bounds_particles!(system, buffer, nhs, v_ode, u_ode, semi) = system
 
 function deactivate_out_of_bounds_particles!(system, buffer::SystemBuffer,
-                                             nhs::GridNeighborhoodSearch, v_ode, u_ode, semi)
-    deactivate_out_of_bounds_particles!(system, buffer, nhs, nhs.cell_list, v_ode, u_ode, semi)
+                                             nhs::GridNeighborhoodSearch, v_ode, u_ode,
+                                             semi)
+    deactivate_out_of_bounds_particles!(system, buffer, nhs, nhs.cell_list, v_ode, u_ode,
+                                        semi)
 end
 
-function deactivate_out_of_bounds_particles!(system, buffer, nhs, cell_list, v_ode, u_ode, semi)
+function deactivate_out_of_bounds_particles!(system, buffer, nhs, cell_list, v_ode, u_ode,
+                                             semi)
     return system
 end
 
 function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
-                                             cell_list::FullGridCellList, v_ode, u_ode, semi)
+                                             cell_list::FullGridCellList, v_ode, u_ode,
+                                             semi)
     u = wrap_u(u_ode, system, semi)
     v = wrap_v(v_ode, system, semi)
 
@@ -56,18 +60,28 @@ end
     deactivation_cleanup(system, system.particle_refinement, v_ode, u_ode, semi)
 end
 
-@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement::Nothing, v_ode, u_ode, semi)
+@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement::Nothing,
+                                      v_ode, u_ode, semi)
     update_system_buffer!(system.buffer)
 end
 
-@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement, v_ode, u_ode, semi)
+@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement, v_ode, u_ode,
+                                      semi)
     compact_system!(system, v_ode, u_ode, semi)
 end
 
 @propagate_inbounds function foreach_neighbor(f, system_coords, neighbor_coords,
-                                              neighborhood_search, backend, particle; kwargs...)
+                                              neighborhood_search, backend, particle;
+                                              kwargs...)
     PointNeighbors.foreach_neighbor(f, system_coords, neighbor_coords,
                                     neighborhood_search, particle; kwargs...)
+end
+
+@propagate_inbounds function mapreduce_neighbor(f, op, system_coords, neighbor_coords,
+                                                neighborhood_search, backend, particle;
+                                                init)
+    PointNeighbors.mapreduce_neighbor(f, op, system_coords, neighbor_coords,
+                                      neighborhood_search, particle; init)
 end
 
 # We cannot dispatch by `AbstractGPUArray` because this is called from within
@@ -79,7 +93,17 @@ end
     # Note that this is not safe if the neighborhood search was not initialized correctly.
     # For example, this is unsafe when benchmarking `interact!` with the wrong NHS.
     PointNeighbors.foreach_neighbor_unsafe(f, system_coords, neighbor_coords,
-                                           neighborhood_search, particle; kwargs)
+                                           neighborhood_search, particle; kwargs...)
+end
+
+@inline function mapreduce_neighbor(f, op, system_coords, neighbor_coords,
+                                    neighborhood_search,
+                                    backend::KernelAbstractions.GPU, particle; init)
+    # On GPUs, remove all bounds checks for maximum performance.
+    # Note that this is not safe if the neighborhood search was not initialized correctly.
+    # For example, this is unsafe when benchmarking `interact!` with the wrong NHS.
+    PointNeighbors.mapreduce_neighbor_unsafe(f, op, system_coords, neighbor_coords,
+                                             neighborhood_search, particle; init)
 end
 
 # === Compact support selection ===
@@ -113,7 +137,6 @@ end
     # Use the compact support of the fluid
     return compact_support(system.fluid_system, neighbor.fluid_system)
 end
-
 
 @inline function compact_support(system::OpenBoundarySystem, neighbor::RigidBodySystem)
     # Rigid/open-boundary interactions are currently not modeled.
@@ -220,20 +243,6 @@ end
 end
 
 # === Neighborhood search creation ===
-function create_neighborhood_search(::Nothing, system, neighbor)
-    nhs = TrivialNeighborhoodSearch{ndims(system)}()
-
-    return create_neighborhood_search(nhs, system, neighbor)
-end
-
-# Avoid method ambiguity
-function create_neighborhood_search(::Nothing, system::TotalLagrangianSPHSystem,
-                                    neighbor::TotalLagrangianSPHSystem)
-    nhs = TrivialNeighborhoodSearch{ndims(system)}()
-
-    return create_neighborhood_search(nhs, system, neighbor)
-end
-
 function create_neighborhood_search(neighborhood_search, system, neighbor)
     return copy_neighborhood_search(neighborhood_search, compact_support(system, neighbor),
                                     nparticles(neighbor))
@@ -246,13 +255,196 @@ function create_neighborhood_search(neighborhood_search, system::TotalLagrangian
                                     nparticles(neighbor))
 end
 
+# === Neighborhood search handlers ===
+# Handlers manage how neighborhood searches are stored and retrieved for
+# different interacting systems.
+abstract type AbstractNHSHandler end
+
+function create_neighborhood_search_handler(::Type{Handler}, neighborhood_search,
+                                            systems) where {Handler <: AbstractNHSHandler}
+    return Handler(neighborhood_search, systems)
+end
+
+function create_neighborhood_search_handler(::Type{Handler}, neighborhood_search::Nothing,
+                                            systems) where {Handler <: AbstractNHSHandler}
+    # `neighborhood_search = nothing` creates a `TrivialNeighborhoodSearch`.
+    nhs = TrivialNeighborhoodSearch{ndims(first(systems))}()
+    return Handler(nhs, systems)
+end
+
+function create_neighborhood_search_handler(handler, neighborhood_search, systems)
+    throw(ArgumentError("`neighborhood_search_handler` must be a handler type, " *
+                        "for example `PairsNHSHandler` or `SharedNHSHandler`."))
+end
+
+# `neighborhood_search = nothing` creates a `TrivialNeighborhoodSearch`.
+function default_neighborhood_search_handler(::Union{Nothing, TrivialNeighborhoodSearch})
+    # Prefer the `PairsNHSHandler` for `TrivialNeighborhoodSearch` because it allows for
+    # infinite search radius, which the `SharedNHSHandler` does not support.
+    return PairsNHSHandler
+end
+
+function default_neighborhood_search_handler(neighborhood_search::AbstractNeighborhoodSearch)
+    # If the neighborhood search does not require updates when the first system moves,
+    # we can query neighbors of arbitrary particles without updating the neighborhood search.
+    # In this case, we can use a single neighborhood search per neighbor system,
+    # instead of one per pair of systems, which all store the same information.
+    if !PointNeighbors.requires_update(neighborhood_search)[1]
+        return SharedNHSHandler
+    end
+
+    return PairsNHSHandler
+end
+
+first_neighborhood_search(searches::AbstractMatrix) = first(searches)
+first_neighborhood_search(searches) = first(first(searches))
+
+function neighborhood_search_name(handler::AbstractNHSHandler)
+    search = first_neighborhood_search(handler.neighborhood_searches)
+
+    return nameof(typeof(search))
+end
+
+"""
+    PairsNHSHandler
+
+Neighborhood search handler that stores one neighborhood search for each ordered
+pair of systems.
+
+`PairsNHSHandler` is the fully generic handler. Use it for neighborhood search
+implementations whose data are tied to the specific pair of systems used during
+an update, e.g., [`PrecomputedNeighborhoodSearch`](@ref).
+It is compatible with all neighborhood search implementations and is
+the default for searches that cannot use [`SharedNHSHandler`](@ref).
+
+# Examples
+```jldoctest semi_example; output=false, setup = :(using TrixiParticles; trixi_include(@__MODULE__, joinpath(examples_dir(), "fluid", "hydrostatic_water_column_2d.jl"), sol=nothing); system1 = fluid_system; system2 = boundary_system)
+semi = Semidiscretization(system1, system2;
+                          neighborhood_search_handler=PairsNHSHandler)
+
+# output
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Semidiscretization                                                                               │
+│ ══════════════════                                                                               │
+│ #spatial dimensions: ………………………… 2                                                                │
+│ #systems: ……………………………………………………… 2                                                                │
+│ neighborhood search: ………………………… GridNeighborhoodSearch                                           │
+│ total #particles: ………………………………… 636                                                              │
+│ eltype: …………………………………………………………… Float64                                                          │
+│ coordinates eltype: …………………………… Float64                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+"""
+struct PairsNHSHandler{NHS} <: AbstractNHSHandler
+    neighborhood_searches::NHS
+end
+
+function PairsNHSHandler(neighborhood_search::AbstractNeighborhoodSearch, systems)
+    searches = [create_neighborhood_search(neighborhood_search, system, neighbor)
+                for system in systems, neighbor in systems]
+
+    @assert isconcretetype(eltype(searches)) "neighborhood searches are not type-stable"
+
+    return PairsNHSHandler(searches)
+end
+
+function get_neighborhood_search(handler::PairsNHSHandler, system_index, neighbor_index,
+                                 search_radius)
+    return handler.neighborhood_searches[system_index, neighbor_index]
+end
+
+"""
+    SharedNHSHandler
+
+Neighborhood search handler optimized for reusable neighborhood searches.
+
+`SharedNHSHandler` stores one neighborhood search for each neighbor system and
+required search radius, instead of one search for every ordered pair of systems.
+For a query involving `(system, neighbor)`, it selects the stored search for the
+neighbor system with a radius large enough for that pair's compact support.
+
+This handler reuses the same neighborhood search for all interactions
+that have the same neighbor system and search radius. This is only possible if the
+neighborhood search stores information about the neighbor particles only.
+For example, a grid-based search can be shared because it stores the neighbor
+particles in grid cells and it does not store information about the first particle set.
+In contrast, a precomputed neighbor list cannot be shared because its
+stored neighbors are tied to the specific query particles used during initialization.
+
+The `SharedNHSHandler` is the default handler for compatible neighborhood search
+implementations because it avoids storing and updating redundant neighborhood searches.
+
+!!! warning
+    This handler is only compatible with neighborhood searches that can query
+    neighbors of arbitrary points in space after an update,
+    e.g. [`GridNeighborhoodSearch`](@ref) and [`TrivialNeighborhoodSearch`](@ref).
+    [`PrecomputedNeighborhoodSearch`](@ref) is not compatible because it can only
+    query neighbors for the particles that were used to update the search.
+
+# Examples
+```jldoctest semi_example; output=false, setup = :(using TrixiParticles; trixi_include(@__MODULE__, joinpath(examples_dir(), "fluid", "hydrostatic_water_column_2d.jl"), sol=nothing); system1 = fluid_system; system2 = boundary_system)
+semi = Semidiscretization(system1, system2;
+                          neighborhood_search=GridNeighborhoodSearch{2}(),
+                          neighborhood_search_handler=SharedNHSHandler)
+
+# output
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Semidiscretization                                                                               │
+│ ══════════════════                                                                               │
+│ #spatial dimensions: ………………………… 2                                                                │
+│ #systems: ……………………………………………………… 2                                                                │
+│ neighborhood search: ………………………… GridNeighborhoodSearch                                           │
+│ total #particles: ………………………………… 636                                                              │
+│ eltype: …………………………………………………………… Float64                                                          │
+│ coordinates eltype: …………………………… Float64                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+"""
+struct SharedNHSHandler{SR, NHS} <: AbstractNHSHandler
+    search_radii::SR
+    neighborhood_searches::NHS
+end
+
+function SharedNHSHandler(neighborhood_search::AbstractNeighborhoodSearch, systems)
+    if PointNeighbors.requires_update(neighborhood_search)[1]
+        throw(ArgumentError("`SharedNHSHandler` is not compatible with neighborhood search " *
+                            "implementations that require updates when the first system moves, " *
+                            "such as `PrecomputedNeighborhoodSearch`"))
+    end
+
+    search_radii = [sort(unique(compact_support(system, neighbor)
+                                for system in systems))
+                    for neighbor in systems]
+
+    searches = [[copy_neighborhood_search(neighborhood_search, search_radius,
+                                          nparticles(neighbor))
+                 for search_radius in search_radii[neighbor_index]]
+                for (neighbor_index, neighbor) in pairs(systems)]
+
+    searches_are_concrete = isconcretetype(eltype(searches)) &&
+                            all(row -> isconcretetype(eltype(row)), searches)
+    @assert searches_are_concrete "neighborhood searches are not type-stable"
+
+    return SharedNHSHandler(search_radii, searches)
+end
+
+function get_neighborhood_search(handler::SharedNHSHandler, system_index, neighbor_index,
+                                 search_radius)
+    radii = handler.search_radii[neighbor_index]
+
+    # Subtract `eps` to avoid selecting the next larger radius due to rounding errors.
+    radius_index = searchsortedfirst(radii, search_radius - eps(search_radius))
+
+    @boundscheck if radius_index > length(radii)
+        throw(ArgumentError("no shared neighborhood search with radius >= $search_radius"))
+    end
+
+    return handler.neighborhood_searches[neighbor_index][radius_index]
+end
+
 # === Neighborhood search lookup ===
 @inline function get_neighborhood_search(system, semi)
-    (; neighborhood_searches) = semi
-
-    system_index = system_indices(system, semi)
-
-    return neighborhood_searches[system_index, system_index]
+    return get_neighborhood_search(system, system, semi)
 end
 
 @inline function get_neighborhood_search(system::TotalLagrangianSPHSystem, semi)
@@ -262,17 +454,19 @@ end
 end
 
 @inline function get_neighborhood_search(system, neighbor_system, semi)
-    (; neighborhood_searches) = semi
+    (; neighborhood_search_handler) = semi
 
     system_index = system_indices(system, semi)
     neighbor_index = system_indices(neighbor_system, semi)
+    search_radius = compact_support(system, neighbor_system)
 
-    return neighborhood_searches[system_index, neighbor_index]
+    return get_neighborhood_search(neighborhood_search_handler, system_index,
+                                   neighbor_index, search_radius)
 end
 
 @inline function get_neighborhood_search(system::TotalLagrangianSPHSystem,
                                          neighbor_system::TotalLagrangianSPHSystem, semi)
-    (; neighborhood_searches) = semi
+    (; neighborhood_search_handler) = semi
 
     system_index = system_indices(system, semi)
     neighbor_index = system_indices(neighbor_system, semi)
@@ -283,7 +477,10 @@ end
         return system.self_interaction_nhs
     end
 
-    return neighborhood_searches[system_index, neighbor_index]
+    search_radius = compact_support(system, neighbor_system)
+
+    return get_neighborhood_search(neighborhood_search_handler, system_index,
+                                   neighbor_index, search_radius)
 end
 
 # === Initialization ===
@@ -672,51 +869,112 @@ end
     @threaded parallelization_backend for point in points
         @inbounds foreach_symmetric_neighbor(f, system, neighbor_system,
                                              system_coords, neighbor_coords,
-                                             neighborhood_search, parallelization_backend, point)
+                                             neighborhood_search, parallelization_backend,
+                                             point)
     end
 end
 
-@inline function foreach_symmetric_neighbor(f::F, system, neighbor_system,
-                                            system_coords, neighbor_coords,
-                                            neighborhood_search, args...;
-                                            kwargs...) where {F}
+@propagate_inbounds function foreach_symmetric_neighbor(f::F, system, neighbor_system,
+                                                        system_coords, neighbor_coords,
+                                                        neighborhood_search, args...;
+                                                        kwargs...) where {F}
     has_system_variable_smoothing_length = Val(has_variable_smoothing_length(system))
     has_neighbor_variable_smoothing_length = Val(has_variable_smoothing_length(neighbor_system))
-    foreach_symmetric_neighbor_dispatch(f, has_system_variable_smoothing_length, has_neighbor_variable_smoothing_length, system, neighbor_system,
+    foreach_symmetric_neighbor_dispatch(f, has_system_variable_smoothing_length,
+                                        has_neighbor_variable_smoothing_length, system,
+                                        neighbor_system,
                                         system_coords, neighbor_coords,
                                         neighborhood_search, args...; kwargs...)
 end
 
-@inline function foreach_symmetric_neighbor_dispatch(f::F, ::Val{false}, ::Val{false},
-                                                     system, neighbor_system,
-                                                     system_coords, neighbor_coords,
-                                                     neighborhood_search, args...;
-                                                     kwargs...) where {F}
-    foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search, args...; kwargs...)
+@propagate_inbounds function foreach_symmetric_neighbor_dispatch(f::F, ::Val{false},
+                                                                 ::Val{false},
+                                                                 system, neighbor_system,
+                                                                 system_coords,
+                                                                 neighbor_coords,
+                                                                 neighborhood_search,
+                                                                 args...;
+                                                                 kwargs...) where {F}
+    foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search, args...;
+                     kwargs...)
 end
 
-@inline function foreach_symmetric_neighbor_dispatch(f::F, system_has_variable_smoothing_length, neighbor_has_variable_smoothing_length,
-                                                     system, neighbor_system,
-                                                     system_coords, neighbor_coords,
-                                                     neighborhood_search, args...;
-                                                     kwargs...) where {F}
+@propagate_inbounds function foreach_symmetric_neighbor_dispatch(f::F,
+                                                                 system_has_variable_smoothing_length,
+                                                                 neighbor_has_variable_smoothing_length,
+                                                                 system, neighbor_system,
+                                                                 system_coords,
+                                                                 neighbor_coords,
+                                                                 neighborhood_search,
+                                                                 args...;
+                                                                 kwargs...) where {F}
     kernel = system_smoothing_kernel(system)
 
-    culling_closure = @inline function(particle, neighbor, pos_diff, distance)
+    culling_closure = @inline function (particle, neighbor, pos_diff, distance)
         h_a = smoothing_length(system, particle)
         h_b = smoothing_length(neighbor_system, neighbor)
-        h_ab = 0.5 * (h_a + h_b)
 
-        R_ab = compact_support(kernel, h_ab)
-
-        # Reject asymmetric interactions outside blended compact support
-        if distance > R_ab
-            return nothing
-        end
+        # Keep all pairs within the larger of both compact supports.
+        # Terms using the kernel of the smaller particle vanish beyond its own support.
+        distance > compact_support(kernel, max(h_a, h_b)) && return nothing
 
         f(particle, neighbor, pos_diff, distance)
     end
 
     foreach_neighbor(culling_closure, system_coords, neighbor_coords,
                      neighborhood_search, args...; kwargs...)
+end
+
+@propagate_inbounds function mapreduce_symmetric_neighbor(f::F, op, system, neighbor_system,
+                                                          system_coords, neighbor_coords,
+                                                          neighborhood_search, backend,
+                                                          particle; init) where {F}
+    has_system_variable_smoothing_length = Val(has_variable_smoothing_length(system))
+    has_neighbor_variable_smoothing_length = Val(has_variable_smoothing_length(neighbor_system))
+
+    return mapreduce_symmetric_neighbor_dispatch(f, op,
+                                                 has_system_variable_smoothing_length,
+                                                 has_neighbor_variable_smoothing_length,
+                                                 system, neighbor_system,
+                                                 system_coords, neighbor_coords,
+                                                 neighborhood_search, backend, particle;
+                                                 init)
+end
+
+@propagate_inbounds function mapreduce_symmetric_neighbor_dispatch(f::F, op, ::Val{false},
+                                                                   ::Val{false},
+                                                                   system, neighbor_system,
+                                                                   system_coords,
+                                                                   neighbor_coords,
+                                                                   neighborhood_search,
+                                                                   backend, particle;
+                                                                   init) where {F}
+    return mapreduce_neighbor(f, op, system_coords, neighbor_coords,
+                              neighborhood_search, backend, particle; init)
+end
+
+@propagate_inbounds function mapreduce_symmetric_neighbor_dispatch(f::F, op,
+                                                                   system_has_variable_smoothing_length,
+                                                                   neighbor_has_variable_smoothing_length,
+                                                                   system, neighbor_system,
+                                                                   system_coords,
+                                                                   neighbor_coords,
+                                                                   neighborhood_search,
+                                                                   backend, particle;
+                                                                   init) where {F}
+    kernel = system_smoothing_kernel(system)
+
+    culling_closure = @inline function (particle, neighbor, pos_diff, distance)
+        h_a = smoothing_length(system, particle)
+        h_b = smoothing_length(neighbor_system, neighbor)
+
+        # Keep all pairs within the larger of both compact supports.
+        # Terms using the kernel of the smaller particle vanish beyond its own support.
+        distance > compact_support(kernel, max(h_a, h_b)) && return init
+
+        return f(particle, neighbor, pos_diff, distance)
+    end
+
+    return mapreduce_neighbor(culling_closure, op, system_coords, neighbor_coords,
+                              neighborhood_search, backend, particle; init)
 end

@@ -91,9 +91,9 @@ box_logic = (system, particle, v, u,
     pos = TrixiParticles.current_coords(u, system, particle)
     if (x_min < pos[1] < x_max) && (y_min < pos[2] < y_max)
         return min_spacing
-    else 
+    else
         return max_spacing
-    end 
+    end
 end
 
 box_criterion = SolutionRefinementCriterion(box_logic)
@@ -113,19 +113,19 @@ density_calculator = ContinuityDensity()
 correction = nothing
 
 fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
-                            sound_speed,
-                            density_calculator,
-                            viscosity,
-                            shifting_technique,
-                            particle_refinement=refinement,
-                            buffer_size=n_buffer_particles)
+                                           sound_speed,
+                                           density_calculator,
+                                           viscosity,
+                                           shifting_technique,
+                                           particle_refinement=refinement,
+                                           buffer_size=n_buffer_particles)
 # ==========================================================================================
 # ==== Simulation
 min_corner=[0.0, 0.0]
 max_corner=[box_length, box_length]
 periodic_box = PeriodicBox(; min_corner, max_corner)
 nhs = GridNeighborhoodSearch{2}(; cell_list=FullGridCellList(; min_corner, max_corner),
-                                    update_strategy=ParallelUpdate(), periodic_box)
+                                update_strategy=ParallelUpdate(), periodic_box)
 
 semi = Semidiscretization(fluid_system,
                           neighborhood_search=nhs)
@@ -141,54 +141,21 @@ pp_callback = nothing
 
 v_tmp = similar(ode.u0.x[1])
 u_tmp = similar(ode.u0.x[2])
+startup_done = Ref(false)
 function apply_refinement!(integrator)
     v_ode = integrator.u.x[1]
     u_ode = integrator.u.x[2]
     semi = integrator.p.semi
-    system = semi.systems[1]
     length_u_before = length(u_ode)
 
-    # integrator.stats.naccept > 3 && TrixiParticles.@autoinfiltrate    
+    # Build the graded spacing field before the first time step
+    if !startup_done[]
+        TrixiParticles.refinement_startup!(semi, v_ode, u_ode, v_tmp, u_tmp)
+        startup_done[] = true
+    end
 
-    TrixiParticles.reset_refinement!(system,
-                                     semi)
-    TrixiParticles.compact_system!(system, v_ode,
-                                   u_ode, semi)
-    neighborhood_search = TrixiParticles.get_neighborhood_search(system,
-                                                                 semi)
-    u = TrixiParticles.wrap_u(u_ode, system,
-                              semi)
-
-    TrixiParticles.update_nhs!(neighborhood_search,
-                               system,
-                               system, u, u,
-                               semi)
-
-    TrixiParticles.apply_refinement_criteria!(system,
-                                              v_ode,
-                                              u_ode,
-                                              semi)
-
-    TrixiParticles.update_particle_spacing(system,
-                                           v_ode,
-                                           u_ode,
-                                           semi)
-
-    TrixiParticles.split_particles!(semi, v_ode,
-                                    u_ode, v_tmp,
-                                    u_tmp)
-
-    TrixiParticles.merge_particles!(system,
-                                    v_ode, u_ode,
-                                    semi)
-
-    TrixiParticles.shift_particles!(system,
-                                    v_ode, u_ode,
-                                    semi)
+    TrixiParticles.refinement!(semi, v_ode, u_ode, v_tmp, u_tmp)
     # TrixiParticles.@autoinfiltrate
-
-    # Update the neighborhoodsearches of all systems
-    TrixiParticles.update_nhs!(semi, u_ode)
 
     if length(u_ode) > length_u_before
         resize!(integrator,
@@ -197,8 +164,6 @@ function apply_refinement!(integrator)
     end
 
     derivative_discontinuity!(integrator, true)
-
-    # integrator.stats.naccept > 5 && TrixiParticles.@autoinfiltrate    
 end
 
 last_refined_step = Ref(-1)
