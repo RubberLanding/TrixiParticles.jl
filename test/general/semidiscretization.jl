@@ -224,6 +224,26 @@
             @test_throws ArgumentError(error_str) Semidiscretization(fluid_system,
                                                                      boundary_system)
         end
+
+        @testset verbose=true "Argument Error with `restart_with` and refinement" begin
+            ic = RectangularShape(0.1, (6, 6), (0.0, 0.0), density=1000.0)
+            state_equation = StateEquationCole(sound_speed=10.0, reference_density=1000.0,
+                                               exponent=7)
+            refinement = ParticleRefinement(spacing_ratio=0.5, min_spacing=0.05,
+                                            max_spacing=0.1, reference_density=1000.0)
+            fluid_system = WeaklyCompressibleSPHSystem(ic;
+                                                       smoothing_kernel=WendlandC2Kernel{2}(),
+                                                       smoothing_length=0.12,
+                                                       density_calculator=ContinuityDensity(),
+                                                       state_equation,
+                                                       particle_refinement=refinement)
+            semi = Semidiscretization(fluid_system)
+
+            error_str = "`restart_with` is not supported with particle refinement " *
+                        "because the particle masses cannot be restored from VTK files"
+            @test_throws ArgumentError(error_str) semidiscretize(semi, (0.0, 1.0);
+                                                                 restart_with="fluid.vtu")
+        end
     end
 
     @testset verbose=true "Interaction Matrix" begin
