@@ -9,17 +9,7 @@ function interact!(dv, v_particle_system, u_particle_system,
     system_coords = current_coordinates(u_particle_system, particle_system)
     neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
 
-    surface_tension_a = surface_tension_model(particle_system)
-    surface_tension_b = surface_tension_model(neighbor_system)
-
-    # For `distance == 0`, the analytical gradient is zero, but the unsafe gradient
-    # and the density diffusion divide by zero.
-    # To account for rounding errors, we check if `distance` is almost zero.
-    # Since the coordinates are in the order of the smoothing length `h`, `distance^2` is in
-    # the order of `h^2`, so we need to check `distance < sqrt(eps(h^2))`.
-    # Note that `sqrt(eps(h^2)) != eps(h)`.
     h = initial_smoothing_length(particle_system)
-    almostzero = sqrt(eps(h^2))
 
     # Loop over all pairs of particles and neighbors within the kernel cutoff
     foreach_symmetric_point_neighbor(particle_system, neighbor_system,
@@ -28,9 +18,10 @@ function interact!(dv, v_particle_system, u_particle_system,
                                                                                           neighbor,
                                                                                           pos_diff,
                                                                                           distance
-        # Skip neighbors with the same position because the kernel gradient is zero.
+        # Skip neighbors with (almost) the same position because the kernel gradient
+        # is zero, but computing it would divide by zero (see `almostzero`).
         # Note that `return` only exits the closure, i.e., skips the current neighbor.
-        skip_zero_distance(particle_system) && distance < almostzero && return
+        skip_zero_distance(particle_system) && distance < almostzero(h) && return
 
         grad_kernel_a,
         grad_kernel_b = kernel_grads_ab(particle_system, neighbor_system,
@@ -49,39 +40,22 @@ function interact!(dv, v_particle_system, u_particle_system,
         p_a = @inbounds current_pressure(v_particle_system, particle_system, particle)
         p_b = @inbounds current_pressure(v_neighbor_system, neighbor_system, neighbor)
 
-        # This technique by Basa et al. 2017 (10.1002/fld.1927) aims to reduce numerical
-        # errors due to large pressures by subtracting the average pressure of neighboring
-        # particles.
-        # It results in significant improvement for EDAC, especially with TVF,
-        # but not for WCSPH, according to Ramachandran & Puri (2019), Section 3.2.
-        # Note that the return value is zero when not using average pressure reduction.
         m_a = @inbounds hydrodynamic_mass(particle_system, particle)
         m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
-        beta_a = get_beta(particle_system, particle, particle_refinement)
-        beta_a_inv = inv(beta_a)
+        # Propagate `@inbounds` to the momentum equation, which accesses particle data
+        dv_particle = @inbounds add_momentum_equation(zero(v_a), particle_system,
+                                                      neighbor_system,
+                                                      v_particle_system, v_neighbor_system,
+                                                      particle, neighbor,
+                                                      pos_diff, distance, grad_kernel_a,
+                                                      grad_kernel_b, sound_speed, m_a, m_b,
+                                                      p_a, p_b, rho_a, rho_b, v_a, v_b,
+                                                      particle_refinement)
 
-        beta_b = get_beta(neighbor_system, neighbor, get_refinement(neighbor_system))
-
-        dv_pressure, P_a,
-        P_b = evaluate_pressure_terms(particle_system, neighbor_system,
-                                      particle, neighbor, m_a, m_b,
-                                      p_a, p_b, rho_a, rho_b, pos_diff, distance,
-                                      grad_kernel_a, grad_kernel_b,
-                                      beta_a, beta_b,
-                                      particle_refinement)
-
-        grad_kernel_avg = (grad_kernel_a + grad_kernel_b) / 2
-        dv_particle = @inbounds add_dv_viscosity(dv_pressure, particle_refinement,
-                                                 particle_system,
-                                                 neighbor_system,
-                                                 v_particle_system, v_neighbor_system,
-                                                 particle, neighbor, pos_diff, distance,
-                                                 sound_speed, m_a, m_b, rho_a, rho_b,
-                                                 v_a, v_b, grad_kernel_a, grad_kernel_avg,
-                                                 beta_a_inv)
-
-        # Extra terms in the momentum equation when using a shifting technique
+        # Extra terms in the momentum equation when using a shifting technique.
+        # These are not included in `add_momentum_equation` because they must not be
+        # applied to structures (see `interact_structure_fluid!`).
         dv_particle = @inbounds add_dv_shifting(dv_particle,
                                                 shifting_technique(particle_system),
                                                 particle_system, neighbor_system,
@@ -91,30 +65,16 @@ function interact!(dv, v_particle_system, u_particle_system,
                                                 pos_diff, distance, grad_kernel_a,
                                                 correction)
 
-        dv_particle = @inbounds add_dv_surface_tension(dv_particle,
-                                                       surface_tension_a, surface_tension_b,
-                                                       particle_system, neighbor_system,
-                                                       particle, neighbor,
-                                                       pos_diff, distance,
-                                                       rho_a, rho_b, grad_kernel_a, 1)
-
-        dv_particle = @inbounds add_dv_adhesion(dv_particle, surface_tension_a,
-                                                particle_system, neighbor_system,
-                                                particle, neighbor, pos_diff, distance)
-
         for i in 1:ndims(particle_system)
             @inbounds dv[i, particle] += dv_particle[i]
         end
-
-        u_shift_a = delta_v(particle_system, particle)
 
         v_diff = v_a - v_b
 
         pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
                             particle, neighbor, pos_diff, distance,
                             sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b, nu_edac,
-                            P_a, P_b, grad_kernel_a, grad_kernel_b, beta_a_inv,
-                            u_shift_a, particle_refinement)
+                            grad_kernel_a, grad_kernel_b, particle_refinement)
 
         drho_particle = zero(rho_a)
 
@@ -132,13 +92,157 @@ function interact!(dv, v_particle_system, u_particle_system,
     return dv
 end
 
+# Add the acceleration of `particle` due to `neighbor` to `dv_particle`.
+# `particle` must be in `particle_system` and `neighbor` must be in `neighbor_system`.
+# This includes pressure, viscosity, surface tension and adhesion, but not the extra terms
+# from shifting techniques (see `interact_structure_fluid!`).
+# Note that this function is also used for the structure-fluid interaction to compute
+# the exact opposite pair force. When adding new terms here, make sure that they are
+# also valid for structure neighbors.
+@propagate_inbounds function add_momentum_equation(dv_particle,
+                                                   particle_system::EntropicallyDampedSPHSystem,
+                                                   neighbor_system,
+                                                   v_particle_system, v_neighbor_system,
+                                                   particle, neighbor, pos_diff, distance,
+                                                   grad_kernel, sound_speed, m_a, m_b,
+                                                   p_a, p_b, rho_a, rho_b, v_a, v_b)
+    (; correction) = particle_system
+
+    surface_tension_a = surface_tension_model(particle_system)
+    surface_tension_b = surface_tension_model(neighbor_system)
+
+    # This technique by Basa et al. 2017 (10.1002/fld.1927) aims to reduce numerical
+    # errors due to large pressures by subtracting the average pressure of neighboring
+    # particles.
+    # It results in significant improvement for EDAC, especially with TVF,
+    # but not for WCSPH, according to Ramachandran & Puri (2019), Section 3.2.
+    # Note that the return value is zero when not using average pressure reduction.
+    p_avg = average_pressure(particle_system, particle)
+
+    dv_particle += pressure_acceleration(particle_system, neighbor_system,
+                                         particle, neighbor,
+                                         m_a, m_b, p_a - p_avg, p_b - p_avg, rho_a,
+                                         rho_b, pos_diff, distance, grad_kernel,
+                                         correction)
+
+    dv_particle = add_dv_viscosity(dv_particle, particle_system, neighbor_system,
+                                   v_particle_system, v_neighbor_system,
+                                   particle, neighbor, pos_diff, distance,
+                                   sound_speed, m_a, m_b, rho_a, rho_b,
+                                   v_a, v_b, grad_kernel)
+
+    dv_particle = add_dv_surface_tension(dv_particle, surface_tension_a, surface_tension_b,
+                                         particle_system, neighbor_system,
+                                         particle, neighbor, pos_diff, distance,
+                                         rho_a, rho_b, grad_kernel, 1)
+
+    dv_particle = add_dv_adhesion(dv_particle, surface_tension_a,
+                                  particle_system, neighbor_system,
+                                  particle, neighbor, pos_diff, distance)
+
+    return dv_particle
+end
+
+# Without refinement, both kernel gradients are identical
+@propagate_inbounds function add_momentum_equation(dv_particle,
+                                                   particle_system::EntropicallyDampedSPHSystem,
+                                                   neighbor_system,
+                                                   v_particle_system, v_neighbor_system,
+                                                   particle, neighbor, pos_diff, distance,
+                                                   grad_kernel_a, grad_kernel_b,
+                                                   sound_speed, m_a, m_b,
+                                                   p_a, p_b, rho_a, rho_b, v_a, v_b,
+                                                   ::Nothing)
+    return add_momentum_equation(dv_particle, particle_system, neighbor_system,
+                                 v_particle_system, v_neighbor_system,
+                                 particle, neighbor, pos_diff, distance, grad_kernel_a,
+                                 sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b, v_a, v_b)
+end
+
+# With refinement, each particle uses its own smoothing length and pressures are scaled
+# by `beta` (Eq. 8, Haftu et al.).
+@propagate_inbounds function add_momentum_equation(dv_particle,
+                                                   particle_system::EntropicallyDampedSPHSystem,
+                                                   neighbor_system,
+                                                   v_particle_system, v_neighbor_system,
+                                                   particle, neighbor, pos_diff, distance,
+                                                   grad_kernel_a, grad_kernel_b,
+                                                   sound_speed, m_a, m_b,
+                                                   p_a, p_b, rho_a, rho_b, v_a, v_b,
+                                                   refinement)
+    surface_tension_a = surface_tension_model(particle_system)
+    surface_tension_b = surface_tension_model(neighbor_system)
+
+    beta_a = get_beta(particle_system, particle, refinement)
+    beta_b = get_beta(neighbor_system, neighbor, get_refinement(neighbor_system))
+
+    P_a,
+    P_b = scaled_pressures(particle_system, particle, p_a, p_b, rho_a, rho_b,
+                           beta_a, beta_b)
+
+    dv_particle += -m_b * (P_a * grad_kernel_a + P_b * grad_kernel_b)
+
+    grad_kernel_avg = (grad_kernel_a + grad_kernel_b) / 2
+    dv_particle = add_dv_viscosity(dv_particle, refinement,
+                                   particle_system, neighbor_system,
+                                   v_particle_system, v_neighbor_system,
+                                   particle, neighbor, pos_diff, distance,
+                                   sound_speed, m_a, m_b, rho_a, rho_b,
+                                   v_a, v_b, grad_kernel_a, grad_kernel_avg, inv(beta_a))
+
+    dv_particle = add_dv_surface_tension(dv_particle, surface_tension_a, surface_tension_b,
+                                         particle_system, neighbor_system,
+                                         particle, neighbor, pos_diff, distance,
+                                         rho_a, rho_b, grad_kernel_a, 1)
+
+    dv_particle = add_dv_adhesion(dv_particle, surface_tension_a,
+                                  particle_system, neighbor_system,
+                                  particle, neighbor, pos_diff, distance)
+
+    return dv_particle
+end
+
+# Compute the scaled pressures `P_a` and `P_b` (Eq. 8, Haftu et al.)
+@propagate_inbounds function scaled_pressures(particle_system, particle, p_a, p_b,
+                                              rho_a, rho_b, beta_a, beta_b)
+    # Shift both pressures by the same constant a
+    # per-particle average-pressure would cancel the pressure gradient.
+    # The source code implements it correctly, the paper not.
+    p_avg = average_pressure(particle_system, particle)
+
+    P_a = (p_a - p_avg) / (rho_a^2 * beta_a)
+    P_b = (p_b - p_avg) / (rho_b^2 * beta_b)
+
+    return P_a, P_b
+end
+
+# Without refinement, both kernel gradients are identical
 @inline function pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
                                      particle, neighbor,
                                      pos_diff, distance, sound_speed, m_a, m_b,
                                      p_a, p_b, rho_a, rho_b, nu_edac,
-                                     P_a, P_b, grad_kernel_a, grad_kernel_b, beta_a_inv,
-                                     u_shift_a, refinement)
+                                     grad_kernel_a, grad_kernel_b, ::Nothing)
+    return pressure_evolution!(dv, particle_system, neighbor_system, v_diff, grad_kernel_a,
+                               particle, neighbor, pos_diff, distance,
+                               sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b, nu_edac)
+end
+
+@inline function pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
+                                     particle, neighbor,
+                                     pos_diff, distance, sound_speed, m_a, m_b,
+                                     p_a, p_b, rho_a, rho_b, nu_edac,
+                                     grad_kernel_a, grad_kernel_b, refinement)
     (; reference_density) = refinement
+
+    beta_a = get_beta(particle_system, particle, refinement)
+    beta_b = get_beta(neighbor_system, neighbor, get_refinement(neighbor_system))
+    beta_a_inv = inv(beta_a)
+
+    P_a,
+    P_b = scaled_pressures(particle_system, particle, p_a, p_b, rho_a, rho_b,
+                           beta_a, beta_b)
+
+    u_shift_a = delta_v(particle_system, particle)
 
     volume_b = m_b / rho_b
     h_a = smoothing_length(particle_system, particle)
@@ -186,11 +290,9 @@ end
 end
 
 @inline function pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
-                                     particle, neighbor,
+                                     grad_kernel, particle, neighbor,
                                      pos_diff, distance, sound_speed, m_a, m_b,
-                                     p_a, p_b, rho_a, rho_b, nu_edac,
-                                     P_a, P_b, grad_kernel_a, grad_kernel_b, beta_a_inv,
-                                     u_shift_a, ::Nothing)
+                                     p_a, p_b, rho_a, rho_b, nu_edac)
     volume_a = m_a / rho_a
     volume_b = m_b / rho_b
     volume_term = (volume_a^2 + volume_b^2) / m_a
@@ -199,7 +301,7 @@ end
     pressure_diff = p_a - p_b
 
     # This is basically the continuity equation times `sound_speed^2`
-    artificial_eos = m_b * rho_a / rho_b * sound_speed^2 * dot(v_diff, grad_kernel_a)
+    artificial_eos = m_b * rho_a / rho_b * sound_speed^2 * dot(v_diff, grad_kernel)
 
     eta_a = rho_a * nu_edac
     eta_b = rho_b * nu_edac
@@ -220,57 +322,10 @@ end
     # See issue: https://github.com/trixi-framework/TrixiParticles.jl/issues/394
     #
     # This is similar to density diffusion in WCSPH
-    damping_term = volume_term * tmp * pressure_diff * dot(grad_kernel_a, pos_diff)
+    damping_term = volume_term * tmp * pressure_diff * dot(grad_kernel, pos_diff)
 
     # Pressure is stored in `v` right after the velocity
     dv[ndims(particle_system) + 1, particle] += artificial_eos + damping_term
 
     return dv
-end
-
-@inline function evaluate_pressure_terms(particle_system, neighbor_system, particle,
-                                         neighbor,
-                                         m_a, m_b, p_a, p_b, rho_a, rho_b, pos_diff,
-                                         distance,
-                                         grad_kernel_a, grad_kernel_b, beta_a, beta_b,
-                                         refinement::Nothing)
-    p_avg = average_pressure(particle_system, particle)
-
-    # Delegate to standard TrixiParticles architecture
-    correction = system_correction(particle_system)
-    dv_pressure = pressure_acceleration(particle_system, neighbor_system, particle,
-                                        neighbor,
-                                        m_a, m_b, p_a - p_avg, p_b - p_avg, rho_a, rho_b,
-                                        pos_diff, distance, grad_kernel_a, correction)
-
-    # Compute unscaled P_a and P_b for pressure_evolution
-    P_a = (p_a - p_avg) / rho_a^2
-    P_b = (p_b - p_avg) / rho_b^2
-
-    return dv_pressure, P_a, P_b
-end
-
-@inline function evaluate_pressure_terms(particle_system, neighbor_system, particle,
-                                         neighbor,
-                                         m_a, m_b, p_a, p_b, rho_a, rho_b, pos_diff,
-                                         distance,
-                                         grad_kernel_a, grad_kernel_b, beta_a, beta_b,
-                                         refinement)
-
-    # Compute scaled P_a and P_b (Eq. 8)
-    # Shift both pressures by the same constant a 
-    # per-particle average-pressure would cancel the pressure gradient.
-    # The source code implements it correctly, the paper not. 
-    p_avg = average_pressure(particle_system, particle)
-    # p_avg_b = average_pressure(neighbor_system, neighbor)
-
-    P_a = (p_a - p_avg) / (rho_a^2 * beta_a)
-    P_b = (p_b - p_avg) / (rho_b^2 * beta_b)
-
-    # Compute explicit physical pressure
-    term_a_pressure = P_a .* grad_kernel_a
-    term_b_pressure = P_b .* grad_kernel_b
-    dv_pressure = -m_b * (term_a_pressure + term_b_pressure)
-
-    return dv_pressure, P_a, P_b
 end

@@ -17,7 +17,7 @@ using OrdinaryDiffEqLowStorageRK
 
 # ==========================================================================================
 # ==== Resolution
-particle_spacing = 0.025
+particle_spacing = 0.05
 min_spacing = particle_spacing / 2
 max_spacing = particle_spacing
 

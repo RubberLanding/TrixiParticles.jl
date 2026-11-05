@@ -307,3 +307,27 @@ function Base.resize!(A::ThreadedBroadcastArray, length::Int)
 
     return A
 end
+
+# Like `copyto!`, but parallelize over particles to use the same memory access pattern
+# as the particle loops in the right-hand side.
+@inline function copyto_threaded!(dest::Matrix, src, parallelization_backend)
+    if axes(dest) != axes(src)
+        throw(DimensionMismatch("source and destination must have the same axes"))
+    end
+
+    @threaded parallelization_backend for particle in axes(dest, 2)
+        for dimension in axes(dest, 1)
+            @inbounds dest[dimension, particle] = src[dimension, particle]
+        end
+    end
+
+    return dest
+end
+
+@inline function copyto_threaded!(dest::Vector, src, parallelization_backend)
+    @threaded parallelization_backend for particle in eachindex(dest, src)
+        @inbounds dest[particle] = src[particle]
+    end
+
+    return dest
+end
