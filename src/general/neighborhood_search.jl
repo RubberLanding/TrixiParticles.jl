@@ -185,7 +185,13 @@ end
     # interaction. Dummy particle BC use the model's compact support, which is also used
     # for density summations.
     (; smoothing_kernel, smoothing_length) = model
-    return compact_support(smoothing_kernel, smoothing_length)
+    compact_support_ = compact_support(smoothing_kernel, smoothing_length)
+
+    # Fluid particles with a variable smoothing length can reach further than the model.
+    # The kernels of both particles of a pair vanish beyond their compact support.
+    has_variable_smoothing_length(neighbor) || return compact_support_
+
+    return max(compact_support_, compact_support(neighbor, system))
 end
 
 @inline function compact_support(system::WallBoundarySystem,

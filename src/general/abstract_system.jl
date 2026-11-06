@@ -197,6 +197,11 @@ end
 # This is independent of whether the system itself has a refinement (`get_refinement`).
 @inline has_variable_smoothing_length(system) = false
 
+@inline function has_variable_smoothing_length(system, neighbor_system)
+    return has_variable_smoothing_length(system) |
+           has_variable_smoothing_length(neighbor_system)
+end
+
 @inline function initial_smoothing_length(system)
     return initial_smoothing_length(system, Val(has_variable_smoothing_length(system)))
 end

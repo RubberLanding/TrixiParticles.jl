@@ -59,9 +59,7 @@ function interact!(dv, v_particle_system, u_particle_system,
             end
 
             grad_kernel = symmetric_kernel_grad(particle_system, neighbor_system,
-                                                get_refinement(particle_system), pos_diff,
-                                                distance,
-                                                particle, neighbor)
+                                                pos_diff, distance, particle, neighbor)
 
             # `foreach_neighbor` makes sure that `neighbor` is in bounds of `neighbor_system`
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)

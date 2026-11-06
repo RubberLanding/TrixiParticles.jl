@@ -721,7 +721,7 @@ end
     sum_pressures = pressure_offset + fluid_pressure + dynamic_pressure_ +
                     hydrostatic_pressure
 
-    # Variable smoothing length kernel (Eq. 19)
+    # Eq. 19 in Haftu et al. (2023)
     h_w = smoothing_length(system, particle)
     h_f = smoothing_length(neighbor_system, neighbor)
     h_wf = 0.5 * (h_w + h_f)

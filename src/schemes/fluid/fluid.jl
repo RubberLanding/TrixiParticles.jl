@@ -385,22 +385,32 @@ end
 end
 
 # Kernel gradient shared by both particles of a pair
-@inline function symmetric_kernel_grad(particle_system, neighbor_system, ::Nothing,
+@inline function symmetric_kernel_grad(particle_system, neighbor_system,
+                                       pos_diff, distance, particle, neighbor)
+    return symmetric_kernel_grad(Val(has_variable_smoothing_length(particle_system,
+                                                                   neighbor_system)),
+                                 particle_system, neighbor_system,
+                                 pos_diff, distance, particle, neighbor)
+end
+
+@inline function symmetric_kernel_grad(::Val{false}, particle_system, neighbor_system,
                                        pos_diff, distance, particle, neighbor)
     # Now that we know that `distance` is not zero, we can safely call the unsafe
     # version of the kernel gradient to avoid redundant zero checks.
     return smoothing_kernel_grad_unsafe(particle_system, pos_diff, distance, particle)
 end
 
-# With refinement, the average of both gradients keeps the pair interaction antisymmetric
-@inline function symmetric_kernel_grad(particle_system, neighbor_system, refinement,
+# With variable smoothing lengths, the average of the gradients of both particles keeps
+# the pair interaction antisymmetric. Pairs up to the larger of both compact supports reach
+# this point, so we need the safe version, which is zero outside of the compact support.
+@inline function symmetric_kernel_grad(::Val{true}, particle_system, neighbor_system,
                                        pos_diff, distance, particle, neighbor)
-    grad_kernel_a,
-    grad_kernel_b = kernel_grads_ab(particle_system, neighbor_system,
-                                    refinement, pos_diff, distance,
-                                    particle, neighbor)
+    kernel = system_smoothing_kernel(particle_system)
+    h_a = smoothing_length(particle_system, particle)
+    h_b = smoothing_length(neighbor_system, neighbor)
 
-    return (grad_kernel_a + grad_kernel_b) / 2
+    return (kernel_grad(kernel, pos_diff, distance, h_a) +
+            kernel_grad(kernel, pos_diff, distance, h_b)) / 2
 end
 
 include("pressure_acceleration.jl")
