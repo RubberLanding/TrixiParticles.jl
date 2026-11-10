@@ -26,6 +26,10 @@ function deactivate_out_of_bounds_particles!(system, buffer, nhs, cell_list, v_o
     return system
 end
 
+# `GridNeighborhoodSearch` with a `FullGridCellList` requires a bounding box.
+# This function deactivates particles that move outside the bounding box to prevent
+# simulation crashes.
+# Note that deactivating particles is only possible in combination with a 'SystemBuffer'.
 function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
                                              cell_list::FullGridCellList, v_ode, u_ode,
                                              semi)
@@ -37,6 +41,8 @@ function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
             particle_position = current_coords(u, system, particle)
             cell = PointNeighbors.cell_coords(particle_position, nhs)
 
+            # This is the same code as is used in PointNeighbors.jl in `check_cell_bounds`.
+            # It tests that particles are inside the inner grid (without the padding layer for neighbor query).
             if !all(cell[i] in 2:(size(cell_list.linear_indices, i) - 1)
                     for i in eachindex(cell))
                 deactivate_particle!(system, particle, v, u)
@@ -532,7 +538,6 @@ end
 
 # === Neighborhood search updates (per-system) ===
 function update_nhs!(semi, u_ode)
-    # TrixiParticles.@autoinfiltrate
     # Update NHS for each pair of systems
     foreach_system(semi) do system
         u_system = wrap_u(u_ode, system, semi)
@@ -555,7 +560,6 @@ function update_nhs!(neighborhood_search,
                                      RigidBodySystem},
                      u_system, u_neighbor, semi)
     # The current coordinates of fluids and structures change over time
-    # TrixiParticles.@autoinfiltrate
     update!(neighborhood_search,
             current_coordinates(u_system, system),
             current_coordinates(u_neighbor, neighbor),
@@ -864,123 +868,106 @@ function update!(neighborhood_search, x, y, semi; points_moving=(true, true),
                            parallelization_backend=semi.parallelization_backend)
 end
 
-# === Symmetric Neighborhood Search Wrappers for Refinement ===
-@inline function foreach_symmetric_point_neighbor(f, system::AbstractSystem,
-                                                  neighbor_system::AbstractSystem,
-                                                  system_coords, neighbor_coords, semi;
-                                                  points=eachparticle(system),
-                                                  parallelization_backend=semi.parallelization_backend)
-    neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
-
-    @threaded parallelization_backend for point in points
-        @inbounds foreach_symmetric_neighbor(f, system, neighbor_system,
-                                             system_coords, neighbor_coords,
-                                             neighborhood_search, parallelization_backend,
-                                             point)
-    end
+# === Neighbor loops for variable smoothing lengths ===
+# With variable smoothing lengths, the neighborhood search can return pairs that are outside
+# of the compact support of both particles. Skip these pairs by returning `skip_value`.
+# Pairs within the larger of both compact supports are kept. Terms using the kernel of the
+# smaller particle vanish beyond its own support, so these terms have to use the safe kernel
+# functions (e.g. `kernel_grad`), which are zero outside of the compact support.
+@inline function skip_unsupported_pairs(f, system, neighbor_system, skip_value)
+    return skip_unsupported_pairs(f,
+                                  Val(has_variable_smoothing_length(system,
+                                                                    neighbor_system)),
+                                  system, neighbor_system, skip_value)
 end
 
-@propagate_inbounds function foreach_symmetric_neighbor(f::F, system, neighbor_system,
-                                                        system_coords, neighbor_coords,
-                                                        neighborhood_search, args...;
-                                                        kwargs...) where {F}
-    has_system_variable_smoothing_length = Val(has_variable_smoothing_length(system))
-    has_neighbor_variable_smoothing_length = Val(has_variable_smoothing_length(neighbor_system))
-    foreach_symmetric_neighbor_dispatch(f, has_system_variable_smoothing_length,
-                                        has_neighbor_variable_smoothing_length, system,
-                                        neighbor_system,
-                                        system_coords, neighbor_coords,
-                                        neighborhood_search, args...; kwargs...)
-end
+# With a constant smoothing length, this is exactly what the neighborhood search returns
+@inline skip_unsupported_pairs(f, ::Val{false}, system, neighbor_system, skip_value) = f
 
-@propagate_inbounds function foreach_symmetric_neighbor_dispatch(f::F, ::Val{false},
-                                                                 ::Val{false},
-                                                                 system, neighbor_system,
-                                                                 system_coords,
-                                                                 neighbor_coords,
-                                                                 neighborhood_search,
-                                                                 args...;
-                                                                 kwargs...) where {F}
-    foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search, args...;
-                     kwargs...)
-end
-
-@propagate_inbounds function foreach_symmetric_neighbor_dispatch(f::F,
-                                                                 system_has_variable_smoothing_length,
-                                                                 neighbor_has_variable_smoothing_length,
-                                                                 system, neighbor_system,
-                                                                 system_coords,
-                                                                 neighbor_coords,
-                                                                 neighborhood_search,
-                                                                 args...;
-                                                                 kwargs...) where {F}
-    kernel = system_smoothing_kernel(system)
-
-    culling_closure = @inline function (particle, neighbor, pos_diff, distance)
-        h_a = smoothing_length(system, particle)
-        h_b = smoothing_length(neighbor_system, neighbor)
-
-        # Keep all pairs within the larger of both compact supports.
-        # Terms using the kernel of the smaller particle vanish beyond its own support.
-        distance > compact_support(kernel, max(h_a, h_b)) && return nothing
-
-        f(particle, neighbor, pos_diff, distance)
-    end
-
-    foreach_neighbor(culling_closure, system_coords, neighbor_coords,
-                     neighborhood_search, args...; kwargs...)
-end
-
-@propagate_inbounds function mapreduce_symmetric_neighbor(f::F, op, system, neighbor_system,
-                                                          system_coords, neighbor_coords,
-                                                          neighborhood_search, backend,
-                                                          particle; init) where {F}
-    has_system_variable_smoothing_length = Val(has_variable_smoothing_length(system))
-    has_neighbor_variable_smoothing_length = Val(has_variable_smoothing_length(neighbor_system))
-
-    return mapreduce_symmetric_neighbor_dispatch(f, op,
-                                                 has_system_variable_smoothing_length,
-                                                 has_neighbor_variable_smoothing_length,
-                                                 system, neighbor_system,
-                                                 system_coords, neighbor_coords,
-                                                 neighborhood_search, backend, particle;
-                                                 init)
-end
-
-@propagate_inbounds function mapreduce_symmetric_neighbor_dispatch(f::F, op, ::Val{false},
-                                                                   ::Val{false},
-                                                                   system, neighbor_system,
-                                                                   system_coords,
-                                                                   neighbor_coords,
-                                                                   neighborhood_search,
-                                                                   backend, particle;
-                                                                   init) where {F}
-    return mapreduce_neighbor(f, op, system_coords, neighbor_coords,
-                              neighborhood_search, backend, particle; init)
-end
-
-@propagate_inbounds function mapreduce_symmetric_neighbor_dispatch(f::F, op,
-                                                                   system_has_variable_smoothing_length,
-                                                                   neighbor_has_variable_smoothing_length,
-                                                                   system, neighbor_system,
-                                                                   system_coords,
-                                                                   neighbor_coords,
-                                                                   neighborhood_search,
-                                                                   backend, particle;
-                                                                   init) where {F}
-    kernel = system_smoothing_kernel(system)
-
-    culling_closure = @inline function (particle, neighbor, pos_diff, distance)
-        h_a = smoothing_length(system, particle)
-        h_b = smoothing_length(neighbor_system, neighbor)
-
-        # Keep all pairs within the larger of both compact supports.
-        # Terms using the kernel of the smaller particle vanish beyond its own support.
-        distance > compact_support(kernel, max(h_a, h_b)) && return init
+@inline function skip_unsupported_pairs(f::F, ::Val{true}, system, neighbor_system,
+                                        skip_value) where {F}
+    return @inline function (particle, neighbor, pos_diff, distance)
+        if !pair_in_support(system, neighbor_system, particle, neighbor, distance)
+            return skip_value
+        end
 
         return f(particle, neighbor, pos_diff, distance)
     end
+end
 
-    return mapreduce_neighbor(culling_closure, op, system_coords, neighbor_coords,
-                              neighborhood_search, backend, particle; init)
+# Whether a pair is within the larger of both compact supports
+@inline function pair_in_support(system, neighbor_system, particle, neighbor, distance)
+    return pair_in_support(Val(has_variable_smoothing_length(system, neighbor_system)),
+                           system, neighbor_system, particle, neighbor, distance)
+end
+
+@inline function pair_in_support(::Val{false}, system, neighbor_system,
+                                 particle, neighbor, distance)
+    return true
+end
+
+@inline function pair_in_support(::Val{true}, system, neighbor_system,
+                                 particle, neighbor, distance)
+    h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
+
+    return distance <= compact_support(pair_smoothing_kernel(system), max(h_a, h_b))
+end
+
+# The smoothing lengths used for the hydrodynamic interaction of a pair.
+# `system` must be a system with its own smoothing length for this interaction, so pass
+# the fluid system first when the other system is a structure.
+@inline function pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
+    h_a = pair_smoothing_length(system, particle, nothing)
+    h_b = pair_smoothing_length(neighbor_system, neighbor, h_a)
+
+    return h_a, h_b
+end
+
+@inline function pair_smoothing_length(system, particle, h_other)
+    return smoothing_length(system, particle)
+end
+
+# The smoothing length of a TLSPH system is only used for solid mechanics
+@inline function pair_smoothing_length(system::TotalLagrangianSPHSystem, particle, h_other)
+    return smoothing_length(system.boundary_model, particle)
+end
+
+# This model has no smoothing length, so the pair uses the compact support of the fluid
+@inline function pair_smoothing_length(::Union{WallBoundarySystem{<:BoundaryModelMonaghanKajtar},
+                                               RigidBodySystem{<:BoundaryModelMonaghanKajtar},
+                                               TotalLagrangianSPHSystem{<:BoundaryModelMonaghanKajtar}},
+                                       particle, h_other)
+    return h_other
+end
+
+@inline pair_smoothing_kernel(system) = system_smoothing_kernel(system)
+
+@inline function pair_smoothing_kernel(system::TotalLagrangianSPHSystem)
+    return system.boundary_model.smoothing_kernel
+end
+
+@inline function foreach_symmetric_point_neighbor(f, system, neighbor_system,
+                                                  system_coords, neighbor_coords, semi;
+                                                  kwargs...)
+    foreach_point_neighbor(skip_unsupported_pairs(f, system, neighbor_system, nothing),
+                           system, neighbor_system, system_coords, neighbor_coords, semi;
+                           kwargs...)
+end
+
+@propagate_inbounds function foreach_symmetric_neighbor(f, system, neighbor_system,
+                                                        system_coords, neighbor_coords,
+                                                        neighborhood_search, backend,
+                                                        particle; kwargs...)
+    foreach_neighbor(skip_unsupported_pairs(f, system, neighbor_system, nothing),
+                     system_coords, neighbor_coords, neighborhood_search, backend,
+                     particle; kwargs...)
+end
+
+@propagate_inbounds function mapreduce_symmetric_neighbor(f, op, system, neighbor_system,
+                                                          system_coords, neighbor_coords,
+                                                          neighborhood_search, backend,
+                                                          particle; init)
+    return mapreduce_neighbor(skip_unsupported_pairs(f, system, neighbor_system, init), op,
+                              system_coords, neighbor_coords, neighborhood_search,
+                              backend, particle; init)
 end

@@ -46,38 +46,6 @@ end
     return dv_particle
 end
 
-# Without refinement, use the regular kernel gradient
-@propagate_inbounds function add_dv_viscosity(dv_particle, ::Nothing,
-                                              particle_system, neighbor_system,
-                                              v_particle_system, v_neighbor_system,
-                                              particle, neighbor, pos_diff, distance,
-                                              sound_speed, m_a, m_b, rho_a, rho_b,
-                                              v_a, v_b, grad_kernel, grad_kernel_avg,
-                                              beta_a_inv, viscosity_correction=1)
-    return add_dv_viscosity(dv_particle, particle_system, neighbor_system,
-                            v_particle_system, v_neighbor_system,
-                            particle, neighbor, pos_diff, distance,
-                            sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b, grad_kernel,
-                            viscosity_correction)
-end
-
-# With refinement, use the averaged kernel gradient and scale by `1 / beta_a`
-@propagate_inbounds function add_dv_viscosity(dv_particle, refinement,
-                                              particle_system, neighbor_system,
-                                              v_particle_system, v_neighbor_system,
-                                              particle, neighbor, pos_diff, distance,
-                                              sound_speed, m_a, m_b, rho_a, rho_b,
-                                              v_a, v_b, grad_kernel, grad_kernel_avg,
-                                              beta_a_inv, viscosity_correction=1)
-    dv_viscosity = add_dv_viscosity(zero(dv_particle), particle_system, neighbor_system,
-                                    v_particle_system, v_neighbor_system,
-                                    particle, neighbor, pos_diff, distance,
-                                    sound_speed, m_a, m_b, rho_a, rho_b, v_a, v_b,
-                                    grad_kernel_avg, viscosity_correction)
-
-    return dv_particle + dv_viscosity * beta_a_inv
-end
-
 @doc raw"""
     ArtificialViscosityMonaghan(; alpha, beta=0.0, epsilon=0.01)
 

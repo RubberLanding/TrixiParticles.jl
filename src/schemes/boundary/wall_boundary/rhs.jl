@@ -14,8 +14,6 @@ function interact!(dv, v_particle_system, u_particle_system,
                    neighbor_system::Union{AbstractFluidSystem,
                                           OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang}},
                    semi)
-    (; boundary_model) = particle_system
-
     system_coords = current_coordinates(u_particle_system, particle_system)
     neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
 
@@ -23,8 +21,9 @@ function interact!(dv, v_particle_system, u_particle_system,
 
     # Loop over all pairs of particles and neighbors within the kernel cutoff.
     foreach_symmetric_point_neighbor(particle_system, neighbor_system, system_coords,
-                                     neighbor_coords, semi) do particle, neighbor,
-                                                               pos_diff, distance
+                                     neighbor_coords,
+                                     semi) do particle, neighbor,
+                                              pos_diff, distance
         # Skip neighbors with (almost) the same position because the kernel gradient
         # is zero, but computing it would divide by zero (see `almostzero`).
         # Note that `return` only exits the closure, i.e., skips the current neighbor.

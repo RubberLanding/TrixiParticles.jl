@@ -36,6 +36,8 @@ See [Weakly Compressible SPH](@ref wcsph) for more details on the method.
                                 density calculator and the correction method.
                                 To use [Tensile Instability Control](@ref tic), pass
                                 [`tensile_instability_control`](@ref) here.
+                                With particle refinement, the formulation must provide a version with
+                                the arguments `m_a, m_b, rho_a, rho_b, p_a, p_b, W_a, W_b`.
 - `shifting_technique`:         [Shifting technique](@ref shifting) or [transport velocity
                                 formulation](@ref transport_velocity_formulation) to use
                                 with this system. Default is no shifting.
@@ -81,9 +83,9 @@ struct WeaklyCompressibleSPHSystem{NDIMS, ELTYPE <: Real, IC, MA, P, DC, SE, K, 
     surface_tension                   :: SRFT
     surface_normal_method             :: SRFN
     buffer                            :: B
-    particle_refinement               :: PR # TODO
+    particle_refinement               :: PR
     cache                             :: C
-    smoothing_length                  :: SL
+    smoothing_length                  :: SL # Scalar or `Vector` with refinement
 end
 
 # The default constructor needs to be accessible for Adapt.jl to work with this struct.
@@ -142,6 +144,8 @@ function WeaklyCompressibleSPHSystem(initial_condition; smoothing_kernel,
                                                                      density_calculator,
                                                                      NDIMS, ELTYPE,
                                                                      correction)
+    check_pressure_acceleration_variable_h(pressure_acceleration, particle_refinement,
+                                           NDIMS, ELTYPE)
 
     cache = (; create_cache_density(initial_condition, density_calculator)...,
              create_cache_correction(correction, initial_condition.density, NDIMS,
@@ -165,7 +169,7 @@ function WeaklyCompressibleSPHSystem(initial_condition; smoothing_kernel,
     end
 
     if !isnothing(particle_refinement)
-        smoothing_length = fill(smoothing_length, n_particles)
+        smoothing_length = fill(convert(ELTYPE, smoothing_length), n_particles)
     end
 
     return WeaklyCompressibleSPHSystem(initial_condition, mass, pressure,

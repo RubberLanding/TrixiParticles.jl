@@ -21,7 +21,7 @@ end
 end
 
 # WARNING!
-# These functions are intended to be used internally to set the pressure
+# These functions are intended to be used internally to set the velocity
 # of newly activated particles in a callback.
 # DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
 # outside of callbacks.
@@ -37,7 +37,7 @@ end
 end
 
 # WARNING!
-# These functions are intended to be used internally to set the pressure
+# These functions are intended to be used internally to set the position
 # of newly activated particles in a callback.
 # DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
 # outside of callbacks.
@@ -51,6 +51,8 @@ end
 
 @inline function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
     current_mass(system)[particle] = mass
+
+    return system
 end
 
 function create_cache_density(initial_condition, ::SummationDensity)
@@ -68,19 +70,115 @@ end
     return system.mass[particle]
 end
 
+@inline get_refinement(system::AbstractFluidSystem) = system.particle_refinement
+
+@inline function has_variable_smoothing_length(system::AbstractFluidSystem)
+    return !isnothing(get_refinement(system))
+end
+
 @inline function spacing_to_smoothing_length(system::AbstractFluidSystem, particle_spacing)
     return get_refinement(system).smoothing_length_factor * particle_spacing
 end
 
 # Compute the effective particle spacing (Δs = h / C) for a given particle.
-# Note: This yields the true spatial resolution only after the global smoothing 
-# length update (Eq. 35) is applied during refinement. Calling this during refinement, between 
-# splitting and merging, will return inaccurate spacings, as daughter particles 
+# Note: This yields the true spatial resolution only after the global smoothing
+# length update (Eq. 35) is applied during refinement. Calling this during refinement, between
+# splitting and merging, will return inaccurate spacings, as daughter particles
 # temporarily use artificially scaled smoothing lengths to guarantee merging.
 @inline function particle_spacing(system, refinement, particle)
     (; reference_density) = refinement
 
     return (hydrodynamic_mass(system, particle) / reference_density)^(1 / ndims(system))
+end
+
+# Kernel gradient shared by both particles of a pair
+@inline function symmetric_kernel_grad(particle_system, neighbor_system,
+                                       pos_diff, distance, particle, neighbor)
+    return symmetric_kernel_grad(Val(has_variable_smoothing_length(particle_system,
+                                                                   neighbor_system)),
+                                 particle_system, neighbor_system,
+                                 pos_diff, distance, particle, neighbor)
+end
+
+@inline function symmetric_kernel_grad(::Val{false}, particle_system, neighbor_system,
+                                       pos_diff, distance, particle, neighbor)
+    # Now that we know that `distance` is not zero, we can safely call the unsafe
+    # version of the kernel gradient to avoid redundant zero checks.
+    return smoothing_kernel_grad_unsafe(particle_system, pos_diff, distance, particle)
+end
+
+# With variable smoothing lengths, the average of the gradients of both particles keeps
+# the pair interaction antisymmetric.
+@inline function symmetric_kernel_grad(::Val{true}, particle_system, neighbor_system,
+                                       pos_diff, distance, particle, neighbor)
+    grad_kernel_a,
+    grad_kernel_b = pair_kernel_grads(particle_system, neighbor_system,
+                                      pos_diff, distance, particle, neighbor)
+
+    return (grad_kernel_a + grad_kernel_b) / 2
+end
+
+# The kernel gradients with the smoothing lengths of both particles of a pair.
+# Pairs up to the larger of both compact supports can reach this function, so we need
+# the safe version, which is zero outside of the compact support.
+@inline function pair_kernel_grads(particle_system, neighbor_system,
+                                   pos_diff, distance, particle, neighbor)
+    kernel = system_smoothing_kernel(particle_system)
+    h_a, h_b = pair_smoothing_lengths(particle_system, neighbor_system, particle, neighbor)
+
+    return kernel_grad(kernel, pos_diff, distance, h_a),
+           kernel_grad(kernel, pos_diff, distance, h_b)
+end
+
+# Pressure acceleration of `particle` due to `neighbor`. With variable smoothing lengths,
+# each pressure is multiplied by the kernel gradient of its own particle,
+# `p_a ∇W(h_a) + p_b ∇W(h_b)` (Eq. 8 in Haftu et al.), instead of using `grad_kernel`.
+@propagate_inbounds function pressure_acceleration_variable_h(particle_system,
+                                                              neighbor_system,
+                                                              particle, neighbor,
+                                                              m_a, m_b, p_a, p_b,
+                                                              rho_a, rho_b, pos_diff,
+                                                              distance, grad_kernel,
+                                                              correction)
+    return pressure_acceleration_variable_h(Val(has_variable_smoothing_length(particle_system,
+                                                                              neighbor_system)),
+                                            particle_system, neighbor_system,
+                                            particle, neighbor, m_a, m_b, p_a, p_b,
+                                            rho_a, rho_b, pos_diff, distance,
+                                            grad_kernel, correction)
+end
+
+@propagate_inbounds function pressure_acceleration_variable_h(::Val{false},
+                                                              particle_system,
+                                                              neighbor_system,
+                                                              particle, neighbor,
+                                                              m_a, m_b, p_a, p_b,
+                                                              rho_a, rho_b, pos_diff,
+                                                              distance, grad_kernel,
+                                                              correction)
+    return pressure_acceleration(particle_system, neighbor_system, particle, neighbor,
+                                 m_a, m_b, p_a, p_b, rho_a, rho_b, pos_diff, distance,
+                                 grad_kernel, correction)
+end
+
+# Corrections are rejected with variable smoothing lengths (see `check_configuration`),
+# so `correction` is not needed here. The asymmetric version of the formulation expects
+# `W_b` to be evaluated at `-pos_diff`.
+@propagate_inbounds function pressure_acceleration_variable_h(::Val{true},
+                                                              particle_system,
+                                                              neighbor_system,
+                                                              particle, neighbor,
+                                                              m_a, m_b, p_a, p_b,
+                                                              rho_a, rho_b, pos_diff,
+                                                              distance, grad_kernel,
+                                                              correction)
+    grad_kernel_a,
+    grad_kernel_b = pair_kernel_grads(particle_system, neighbor_system,
+                                      pos_diff, distance, particle, neighbor)
+
+    return pressure_acceleration_formulation(particle_system)(m_a, m_b, rho_a, rho_b,
+                                                              p_a, p_b, grad_kernel_a,
+                                                              -grad_kernel_b)
 end
 
 function write_u0!(u0, system::AbstractFluidSystem)
@@ -322,6 +420,17 @@ function restart_v(system::AbstractFluidSystem, data)
 end
 
 function check_configuration(fluid_system::AbstractFluidSystem, systems, nhs)
+    if !isnothing(get_refinement(fluid_system))
+        foreach_system(systems) do system
+            if !isnothing(system_correction(system))
+                throw(ArgumentError("corrections are not supported with particle " *
+                                    "refinement, but the system " *
+                                    "`$(nameof(typeof(system)))` uses " *
+                                    "`$(nameof(typeof(system_correction(system))))`."))
+            end
+        end
+    end
+
     if !(fluid_system isa ParticlePackingSystem) && !isnothing(fluid_system.surface_tension)
         foreach_system(systems) do neighbor
             if neighbor isa AbstractFluidSystem &&
@@ -352,65 +461,6 @@ end
 
 function available_data(::AbstractFluidSystem)
     return (:coordinates, :velocity, :mass, :density, :pressure, :acceleration)
-end
-
-@inline get_refinement(system::AbstractFluidSystem) = system.particle_refinement
-
-@inline function has_variable_smoothing_length(system::AbstractFluidSystem)
-    return !isnothing(get_refinement(system))
-end
-
-# Without refinement, both particles use the regular (possibly corrected) kernel gradient
-@inline function kernel_grads_ab(particle_system, neighbor_system, ::Nothing,
-                                 pos_diff, distance, particle, neighbor)
-    # Now that we know that `distance` is not zero, we can safely call the unsafe
-    # version of the kernel gradient to avoid redundant zero checks.
-    grad_kernel = smoothing_kernel_grad_unsafe(particle_system, pos_diff,
-                                               distance, particle)
-
-    return grad_kernel, grad_kernel
-end
-
-# With refinement, each particle uses its own smoothing length (Haftu et al.).
-# Pairs up to the larger of both compact supports reach this point, so we need the safe
-# version here, which is zero outside the compact support of each kernel.
-@inline function kernel_grads_ab(particle_system, neighbor_system, refinement,
-                                 pos_diff, distance, particle, neighbor)
-    kernel = system_smoothing_kernel(particle_system)
-    h_a = smoothing_length(particle_system, particle)
-    h_b = smoothing_length(neighbor_system, neighbor)
-
-    return kernel_grad(kernel, pos_diff, distance, h_a),
-           kernel_grad(kernel, pos_diff, distance, h_b)
-end
-
-# Kernel gradient shared by both particles of a pair
-@inline function symmetric_kernel_grad(particle_system, neighbor_system,
-                                       pos_diff, distance, particle, neighbor)
-    return symmetric_kernel_grad(Val(has_variable_smoothing_length(particle_system,
-                                                                   neighbor_system)),
-                                 particle_system, neighbor_system,
-                                 pos_diff, distance, particle, neighbor)
-end
-
-@inline function symmetric_kernel_grad(::Val{false}, particle_system, neighbor_system,
-                                       pos_diff, distance, particle, neighbor)
-    # Now that we know that `distance` is not zero, we can safely call the unsafe
-    # version of the kernel gradient to avoid redundant zero checks.
-    return smoothing_kernel_grad_unsafe(particle_system, pos_diff, distance, particle)
-end
-
-# With variable smoothing lengths, the average of the gradients of both particles keeps
-# the pair interaction antisymmetric. Pairs up to the larger of both compact supports reach
-# this point, so we need the safe version, which is zero outside of the compact support.
-@inline function symmetric_kernel_grad(::Val{true}, particle_system, neighbor_system,
-                                       pos_diff, distance, particle, neighbor)
-    kernel = system_smoothing_kernel(particle_system)
-    h_a = smoothing_length(particle_system, particle)
-    h_b = smoothing_length(neighbor_system, neighbor)
-
-    return (kernel_grad(kernel, pos_diff, distance, h_a) +
-            kernel_grad(kernel, pos_diff, distance, h_b)) / 2
 end
 
 include("pressure_acceleration.jl")

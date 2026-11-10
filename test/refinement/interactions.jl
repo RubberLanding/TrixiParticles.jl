@@ -113,6 +113,58 @@
             # The neighborhood search returns this pair, but it must not interact
             @test iszero(pair_dv(0.06, 0.06))
         end
+
+        @testset "Each Pressure Uses the Kernel Gradient of Its Own Particle" begin
+            # Different densities give different pressures
+            rho_a, rho_b = 1100.0, 1050.0
+            pair = InitialCondition(; coordinates, mass, density=[rho_a, rho_b],
+                                    particle_spacing=0.1)
+            fluid_system = WeaklyCompressibleSPHSystem(pair; smoothing_kernel,
+                                                       smoothing_length=0.12,
+                                                       density_calculator=ContinuityDensity(),
+                                                       state_equation,
+                                                       particle_refinement=refinement)
+            semi = Semidiscretization(fluid_system;
+                                      parallelization_backend=SerialBackend())
+            ode = semidiscretize(semi, (0.0, 0.1))
+            system = ode.p.semi.systems[1]
+            h_a, h_b = 0.1, 0.12
+            TrixiParticles.set_particle_smoothing_length!(system, 1, h_a)
+            TrixiParticles.set_particle_smoothing_length!(system, 2, h_b)
+
+            v_ode, u_ode = ode.u0.x
+            dv_ode = zero(v_ode)
+            TrixiParticles.kick!(dv_ode, v_ode, u_ode, ode.p, 0.0)
+            dv = TrixiParticles.wrap_v(dv_ode, system, ode.p.semi)
+
+            pos_diff = SVector(-0.15, 0.0)
+            grad_a = TrixiParticles.kernel_grad(smoothing_kernel, pos_diff, 0.15, h_a)
+            grad_b = TrixiParticles.kernel_grad(smoothing_kernel, pos_diff, 0.15, h_b)
+            p_a, p_b = state_equation(rho_a), state_equation(rho_b)
+
+            # `pressure_acceleration_continuity_density` with `p_a ∇W(h_a) + p_b ∇W(h_b)`
+            expected = -mass[2] / (rho_a * rho_b) * (p_a * grad_a + p_b * grad_b)
+            averaged = -mass[2] * (p_a + p_b) / (rho_a * rho_b) * (grad_a + grad_b) / 2
+
+            @test !isapprox(expected[1], averaged[1])
+            @test isapprox(dv[1, 1], expected[1], rtol=1e-12)
+            @test isapprox(mass[1] * dv[1, 1], -mass[2] * dv[1, 2], rtol=1e-12)
+        end
+    end
+
+    @testset "Formulation Without Two Gradients is Rejected" begin
+        tank = RectangularTank(0.1, (0.5, 0.5), (1.0, 1.0), 1000.0; n_layers=3)
+        error_str = "when using particle refinement, the passed pressure " *
+                    "acceleration formulation must provide a version with the " *
+                    "arguments `m_a, m_b, rho_a, rho_b, p_a, p_b, W_a, W_b`"
+
+        @test_throws ArgumentError(error_str) WeaklyCompressibleSPHSystem(tank.fluid;
+                                                                          smoothing_kernel,
+                                                                          smoothing_length=0.12,
+                                                                          density_calculator=ContinuityDensity(),
+                                                                          state_equation,
+                                                                          pressure_acceleration=tensile_instability_control,
+                                                                          particle_refinement=refinement)
     end
 
     @testset verbose=true "Wall Next to Fluid With Larger Smoothing Length" begin
@@ -174,6 +226,123 @@
 
             @test pressure(false) > 0
             @test isapprox(pressure(false), pressure(true), rtol=1e-12)
+        end
+    end
+
+    @testset verbose=true "Corrections Are Rejected" begin
+        tank = RectangularTank(0.1, (0.5, 0.5), (1.0, 1.0), 1000.0; n_layers=3)
+        error_str = "corrections are not supported with particle refinement"
+
+        @testset "Fluid" begin
+            fluid_system = WeaklyCompressibleSPHSystem(tank.fluid; smoothing_kernel,
+                                                       smoothing_length=0.12,
+                                                       density_calculator=SummationDensity(),
+                                                       state_equation,
+                                                       correction=KernelCorrection(),
+                                                       particle_refinement=refinement)
+            @test_throws "$error_str" Semidiscretization(fluid_system)
+        end
+
+        @testset "Boundary Model" begin
+            fluid_system = WeaklyCompressibleSPHSystem(tank.fluid; smoothing_kernel,
+                                                       smoothing_length=0.12,
+                                                       density_calculator=ContinuityDensity(),
+                                                       state_equation,
+                                                       particle_refinement=refinement)
+            boundary_model = BoundaryModelDummyParticles(tank.boundary.density,
+                                                         tank.boundary.mass,
+                                                         AdamiPressureExtrapolation(),
+                                                         smoothing_kernel, 0.12;
+                                                         state_equation,
+                                                         correction=KernelCorrection())
+            boundary_system = WallBoundarySystem(tank.boundary, boundary_model)
+
+            @test_throws "$error_str" Semidiscretization(fluid_system, boundary_system)
+        end
+    end
+
+    @testset verbose=true "Boundary Models and Structures" begin
+        fluid = InitialCondition(; coordinates=[0.15; 0.0;;], mass=[10.0], density=[1100.0],
+                                 velocity=[1.0; 0.0;;], particle_spacing=0.1)
+        boundary = InitialCondition(; coordinates=[0.0; 0.0;;], mass=[10.0],
+                                    density=[1000.0], particle_spacing=0.1)
+
+        function create_fluid_system(particle_refinement)
+            return WeaklyCompressibleSPHSystem(fluid; smoothing_kernel,
+                                               smoothing_length=0.12,
+                                               density_calculator=ContinuityDensity(),
+                                               state_equation, particle_refinement)
+        end
+
+        function fluid_dv(systems...)
+            dv_ode, semi = rhs(systems...)
+            return collect(TrixiParticles.wrap_v(dv_ode, semi.systems[1], semi))
+        end
+
+        @testset "Monaghan-Kajtar Wall" begin
+            function dv(particle_refinement)
+                boundary_model = BoundaryModelMonaghanKajtar(10.0, 1.0, 0.1, [10.0])
+                boundary_system = WallBoundarySystem(boundary, boundary_model)
+
+                return fluid_dv(create_fluid_system(particle_refinement), boundary_system)
+            end
+
+            @test any(!iszero, dv(nothing))
+            @test isapprox(dv(refinement), dv(nothing), rtol=1e-12)
+        end
+
+        @testset "TLSPH With Different Smoothing Length" begin
+            function dv(particle_refinement)
+                structure = RectangularShape(0.1, (3, 3), (-0.2, -0.1); density=1000.0)
+                boundary_model = BoundaryModelDummyParticles(structure.density,
+                                                             structure.mass,
+                                                             AdamiPressureExtrapolation(),
+                                                             smoothing_kernel, 0.12;
+                                                             state_equation)
+                structure_system = TotalLagrangianSPHSystem(structure; smoothing_kernel,
+                                                            smoothing_length=0.2,
+                                                            young_modulus=1e4,
+                                                            poisson_ratio=0.3,
+                                                            boundary_model)
+
+                return fluid_dv(create_fluid_system(particle_refinement), structure_system)
+            end
+
+            @test any(!iszero, dv(nothing))
+            @test isapprox(dv(refinement), dv(nothing), rtol=1e-12)
+        end
+
+        @testset "Rigid Body Forces Are Opposite" begin
+            function forces(h_fluid)
+                # A density above the reference density gives a non-zero rigid body pressure,
+                # which is what remains outside of the compact support of the fluid particle.
+                boundary_model = BoundaryModelDummyParticles([1100.0], [10.0],
+                                                             ContinuityDensity(),
+                                                             smoothing_kernel, 0.12;
+                                                             state_equation)
+                rigid_system = RigidBodySystem(boundary; boundary_model)
+
+                semi = Semidiscretization(create_fluid_system(refinement), rigid_system;
+                                          parallelization_backend=SerialBackend())
+                ode = semidiscretize(semi, (0.0, 0.1))
+                fluid_system, rigid_system = ode.p.semi.systems
+                TrixiParticles.set_particle_smoothing_length!(fluid_system, 1, h_fluid)
+
+                v_ode, u_ode = ode.u0.x
+                dv_ode = zero(v_ode)
+                TrixiParticles.kick!(dv_ode, v_ode, u_ode, ode.p, 0.0)
+                dv = TrixiParticles.wrap_v(dv_ode, fluid_system, ode.p.semi)
+
+                return 10.0 * dv[1, 1], rigid_system.force_per_particle[1, 1]
+            end
+
+            # The distance of 0.15 is inside and outside of the fluid's compact support
+            for h_fluid in (0.1, 0.06)
+                force_fluid, force_rigid = forces(h_fluid)
+
+                @test !iszero(force_fluid)
+                @test isapprox(force_fluid, -force_rigid, rtol=1e-12)
+            end
         end
     end
 end
