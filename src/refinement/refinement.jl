@@ -62,21 +62,17 @@ function refinement!(semi, v_ode, u_ode)
 
         # Update the target spacing of all other particles (Alg. 1)
         update_target_spacing!(system, v_ode, u_ode, semi)
-
-        # Merge before splitting, every particle below `m_max` is a candidate (Alg. 3)
-        merge_particles_pre_split!(system, v_ode, u_ode, semi)
     end
 
-    # Split the particles (Alg. 2). This updates all neighborhood searches.
+    # Merge before splitting, every particle below `m_max` is a candidate (Alg. 3).
+    # Merging and splitting update all neighborhood searches.
+    merge_particles!(semi, v_ode, u_ode, before_splitting=true)
+
+    # Split the particles (Alg. 2)
     split_particles!(semi, v_ode, u_ode)
 
     # Merge after splitting, only particles below `m_min` are candidates (Alg. 3)
-    foreach_system(semi) do system
-        merge_particles!(system, v_ode, u_ode, semi)
-    end
-
-    # The neighborhood searches have to find the merged particles
-    update_nhs!(semi, u_ode)
+    merge_particles!(semi, v_ode, u_ode)
 
     # Shift the particles and correct the particle properties.
     # This also updates the smoothing lengths (Eq. 35).
@@ -127,9 +123,8 @@ function create_cache_refinement(initial_condition, refinement)
     # Particles that are split in this refinement call
     split_candidate = zeros(Bool, n_particles)
 
-    # Merging
-    delete_candidates = zeros(Bool, n_particles)
-    merge_candidates = zeros(Int, n_particles)
+    # The merge partner of each particle in the current merge round, 0 without a partner
+    merge_partner = zeros(Int, n_particles)
 
     # Smoothing length update (Eq. 35)
     neighbor_mass = zeros(ELTYPE, n_particles)
@@ -141,7 +136,7 @@ function create_cache_refinement(initial_condition, refinement)
     grad_velocity = zeros(ELTYPE, NDIMS * NDIMS * n_particles)
 
     return (; target_spacing, target_spacing_tmp, is_fixed, split_candidate,
-            delete_candidates, merge_candidates, neighbor_mass, neighbor_count,
+            merge_partner, neighbor_mass, neighbor_count,
             grad_density, grad_pressure, grad_velocity)
 end
 
@@ -150,7 +145,7 @@ resize_cache_refinement!(cache, ::Nothing, n, spacing) = cache
 # The new particles get the target spacing `spacing`
 function resize_cache_refinement!(cache, refinement, n, spacing)
     (; target_spacing, target_spacing_tmp, is_fixed, split_candidate,
-     delete_candidates, merge_candidates, neighbor_mass, neighbor_count,
+     merge_partner, neighbor_mass, neighbor_count,
      grad_density, grad_pressure, grad_velocity) = cache
     NDIMS = div(length(grad_density), length(target_spacing))
 
@@ -159,8 +154,7 @@ function resize_cache_refinement!(cache, refinement, n, spacing)
     resize_and_fill!(is_fixed, n, false)
     resize_and_fill!(split_candidate, n, false)
 
-    resize_and_fill!(delete_candidates, n, false)
-    resize_and_fill!(merge_candidates, n, 0)
+    resize_and_fill!(merge_partner, n, 0)
     resize_and_fill!(neighbor_mass, n, zero(eltype(neighbor_mass)))
     resize_and_fill!(neighbor_count, n, 0)
 
@@ -239,13 +233,12 @@ end
 @inline initialize_refined_particle!(system, ::Nothing, particle) = system
 
 @inline function initialize_refined_particle!(system, refinement, particle)
-    (; target_spacing, is_fixed, delete_candidates) = system.cache
+    (; target_spacing, is_fixed) = system.cache
     (; reference_density) = refinement
 
     mass = hydrodynamic_mass(system, particle)
     target_spacing[particle] = (mass / reference_density)^(1 / ndims(system))
     is_fixed[particle] = false
-    delete_candidates[particle] = false
 
     return system
 end
@@ -264,6 +257,6 @@ include("refinement_criteria.jl")
 include("spacing.jl")
 include("split_pattern.jl")
 include("splitting.jl")
-include("merge.jl")
+include("merging.jl")
 include("shifting.jl")
 include("resize.jl")
