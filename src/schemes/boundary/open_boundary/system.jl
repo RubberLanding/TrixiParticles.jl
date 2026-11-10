@@ -472,11 +472,6 @@ function check_domain!(system, v, u, v_ode, u_ode, semi)
     update_system_buffer!(system.buffer)
     update_system_buffer!(fluid_system.buffer)
 
-    # Transferring particles in and out of the open boundary,
-    # creates holes that we need to fix when using refinement 
-    # by compacting the fluid system
-    compact_system!(fluid_system, v_ode, u_ode, semi)
-
     # Since particles have been transferred, the neighborhood searches must be updated
     update_nhs!(semi, u_ode)
 

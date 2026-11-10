@@ -1,124 +1,130 @@
-abstract type RefinementCriteria end
+abstract type AbstractRefinementCriterion end
 
-struct SpatialRefinementCriterion <: RefinementCriteria end
+"""
+    SpatialRefinementCriterion()
 
-struct SolutionRefinementCriterion{F} <: RefinementCriteria
-    get_target_spacing::F
+Refinement criterion that sets the target spacing of fluid particles near boundaries
+to the particle spacing of the boundary.
+A fluid particle is near a boundary if a boundary particle is within the compact support
+of the fluid particle or of the boundary particle.
+This applies to `WallBoundarySystem`s, structures and `OpenBoundarySystem`s.
+"""
+struct SpatialRefinementCriterion <: AbstractRefinementCriterion end
+
+"""
+    SolutionRefinementCriterion(target_spacing)
+
+Refinement criterion that sets the target spacing of fluid particles based on the solution.
+The function `target_spacing(system, particle, v, u, semi)` returns the requested target
+spacing of `particle`. The criterion is only active where the requested spacing is smaller
+than `max_spacing` of the [`ParticleRefinement`](@ref).
+
+A solution criterion can only decrease the target spacing,
+and it does not apply to particles near boundaries (see [`SpatialRefinementCriterion`](@ref)).
+With multiple solution criteria, the smallest requested spacing is used.
+"""
+struct SolutionRefinementCriterion{F} <: AbstractRefinementCriterion
+    target_spacing::F
 end
 
-struct DummyRefinementCriterion <: RefinementCriteria end
-
-function apply_refinement_criteria!(semi, v_ode, u_ode)
-    foreach_system(semi) do system
-        apply_refinement_criteria!(system, v_ode, u_ode, semi)
-    end
-end
-
+# Set the target spacing of the particles in the regions of the refinement criteria
+# and mark them as fixed for the target spacing update (Alg. 4 in Haftu et al.).
 @inline apply_refinement_criteria!(system, v_ode, u_ode, semi) = system
 
 @inline function apply_refinement_criteria!(system::AbstractFluidSystem, v_ode, u_ode, semi)
-    apply_refinement_criteria!(system, system.particle_refinement, v_ode, u_ode, semi)
+    return apply_refinement_criteria!(system, get_refinement(system), v_ode, u_ode, semi)
 end
 
-@inline function apply_refinement_criteria!(system::AbstractFluidSystem, ::Nothing, v_ode,
-                                            u_ode, semi)
-    system
-end
+@inline apply_refinement_criteria!(system, ::Nothing, v_ode, u_ode, semi) = system
 
-@inline function apply_refinement_criteria!(fluid_system::AbstractFluidSystem, refinement,
-                                            v_ode, u_ode, semi)
-    (; is_fixed) = fluid_system.cache
+function apply_refinement_criteria!(system, refinement, v_ode, u_ode, semi)
     (; criteria) = refinement
 
-    # The target spacing `_particle_spacing` is persistent and is not reset here.
+    # The target spacing persists between refinement calls and is not reset here.
     # Only reset which particles are fixed in this call.
-    fill!(is_fixed, false)
+    set_zero!(system.cache.is_fixed)
 
-    # Set the target spacing (Alg. 4). The spatial criteria always run first,
-    # since they overwrite the spacing of the previous call for unfixed particles.
-    # The solution criteria can then only decrease the spacing.
-    for criterion in criteria
-        apply_spatial_criterion!(criterion, fluid_system, v_ode, u_ode, semi)
-    end
-
-    for criterion in criteria
-        apply_solution_criterion!(criterion, fluid_system, v_ode, u_ode, semi)
-    end
-
-    return fluid_system
-end
-
-@inline apply_spatial_criterion!(criterion, fluid_system, v_ode, u_ode, semi) = fluid_system
-
-@inline function apply_spatial_criterion!(criterion::SpatialRefinementCriterion,
-                                          fluid_system, v_ode, u_ode, semi)
-    # Set the spacing of fluid particles near boundaries to the boundary spacing
-    foreach_system(semi) do neighbor_system
-        spatial_min_spacing!(fluid_system, neighbor_system, v_ode, u_ode, semi)
-    end
-
-    return fluid_system
-end
-
-@inline spatial_min_spacing!(fluid_system::AbstractFluidSystem, neighbor_system, v_ode,
-                             u_ode, semi) = fluid_system
-
-@inline function spatial_min_spacing!(fluid_system::AbstractFluidSystem,
-                                      neighbor_system::Union{OpenBoundarySystem,
-                                                             WallBoundarySystem,
-                                                             AbstractStructureSystem},
-                                      v_ode, u_ode, semi)
-    (; _particle_spacing, is_fixed) = fluid_system.cache
-    neighbor_system_spacing = neighbor_system.initial_condition.particle_spacing
-
-    fluid_u = wrap_u(u_ode, fluid_system, semi)
-    fluid_coords = current_coordinates(fluid_u, fluid_system)
-    neighbor_u = wrap_u(u_ode, neighbor_system, semi)
-    neighbor_coords = current_coordinates(neighbor_u, neighbor_system)
-    neighborhood_search = get_neighborhood_search(fluid_system, neighbor_system, semi)
-    backend = semi.parallelization_backend
-
-    @threaded semi for fluid_particle in eachparticle(fluid_system)
-        @inbounds foreach_symmetric_neighbor(fluid_system, neighbor_system,
-                                             fluid_coords, neighbor_coords,
-                                             neighborhood_search, backend,
-                                             fluid_particle) do fluid_particle, _, _, _
-            # The first boundary in this call overwrites the spacing of the previous call,
-            # further boundaries can only decrease it.
-            if is_fixed[fluid_particle]
-                _particle_spacing[fluid_particle] = min(_particle_spacing[fluid_particle],
-                                                        neighbor_system_spacing)
-            else
-                _particle_spacing[fluid_particle] = neighbor_system_spacing
-                is_fixed[fluid_particle] = true
-            end
+    # The spatial criteria run first, since the solution criteria skip the particles
+    # that the spatial criteria fixed (`MarkBoundary` before `SolutionAdaptive`
+    # in the code of Haftu et al.).
+    if any(criterion -> criterion isa SpatialRefinementCriterion, criteria)
+        foreach_system(semi) do neighbor_system
+            apply_spatial_criterion!(system, neighbor_system, v_ode, u_ode, semi)
         end
     end
 
-    return fluid_system
+    apply_solution_criteria!(system, criteria, v_ode, u_ode, semi)
+
+    return system
 end
 
-@inline apply_solution_criterion!(criterion, system, v_ode, u_ode, semi) = system
+@inline apply_spatial_criterion!(system, neighbor_system, v_ode, u_ode, semi) = system
 
-@inline function apply_solution_criterion!(criterion::SolutionRefinementCriterion, system,
-                                           v_ode, u_ode, semi)
-    (; _particle_spacing, is_fixed) = system.cache
-    (; max_spacing) = system.particle_refinement
-    (; get_target_spacing) = criterion
+function apply_spatial_criterion!(system,
+                                  neighbor_system::Union{WallBoundarySystem,
+                                                         AbstractStructureSystem,
+                                                         OpenBoundarySystem},
+                                  v_ode, u_ode, semi)
+    (; target_spacing, is_fixed) = system.cache
+    neighbor_spacing = neighbor_system.initial_condition.particle_spacing
+
+    u = wrap_u(u_ode, system, semi)
+    u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+    system_coords = current_coordinates(u, system)
+    neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
+
+    foreach_symmetric_point_neighbor(system, neighbor_system,
+                                     system_coords, neighbor_coords, semi;
+                                     points=each_integrated_particle(system)) do particle,
+                                                                                 _, _, _
+        # The first boundary in this call overwrites the target spacing of the previous
+        # call, further boundaries can only decrease it (`MarkBoundary` in the code
+        # of Haftu et al.). Note that each thread only writes to its own `particle`.
+        if is_fixed[particle]
+            target_spacing[particle] = min(target_spacing[particle], neighbor_spacing)
+        else
+            target_spacing[particle] = neighbor_spacing
+            is_fixed[particle] = true
+        end
+    end
+
+    return system
+end
+
+function apply_solution_criteria!(system, criteria, v_ode, u_ode, semi)
+    (; target_spacing, is_fixed) = system.cache
+    (; max_spacing) = get_refinement(system)
 
     v = wrap_v(v_ode, system, semi)
     u = wrap_u(u_ode, system, semi)
 
-    @threaded semi for particle in eachparticle(system)
-        # The criterion is only active where it requests a spacing below `max_spacing`
-        target_spacing = get_target_spacing(system, particle, v, u, semi)
-        target_spacing < max_spacing || return
+    @threaded semi for particle in each_integrated_particle(system)
+        # Particles near boundaries keep the boundary spacing
+        # (`SolutionAdaptive` in the code of Haftu et al.)
+        is_fixed[particle] && return
 
-        # A solution criterion can only decrease the spacing. Near boundaries, this is
-        # the boundary spacing set above, elsewhere the spacing of the previous call.
-        _particle_spacing[particle] = min(_particle_spacing[particle], target_spacing)
+        requested_spacing = mapreduce(min, criteria) do criterion
+            return requested_target_spacing(criterion, system, particle, v, u, semi)
+        end
+
+        # The criteria are only active where they request a spacing below `max_spacing`
+        requested_spacing < max_spacing || return
+
+        # A solution criterion can only decrease the spacing of the previous call
+        target_spacing[particle] = min(target_spacing[particle], requested_spacing)
         is_fixed[particle] = true
     end
 
     return system
+end
+
+# Spatial criteria are applied in `apply_spatial_criterion!`
+@inline function requested_target_spacing(::SpatialRefinementCriterion, system, particle,
+                                          v, u, semi)
+    return typemax(eltype(system))
+end
+
+@inline function requested_target_spacing(criterion::SolutionRefinementCriterion, system,
+                                          particle, v, u, semi)
+    return criterion.target_spacing(system, particle, v, u, semi)
 end

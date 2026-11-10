@@ -25,6 +25,13 @@ function create_cache_shifting(initial_condition, shifting_technique, refinement
     return (;)
 end
 
+# Systems are only resized with refinement, so `delta_v` always exists here
+function resize_cache_shifting!(cache, NDIMS, n)
+    resize_and_fill!(cache.delta_v, NDIMS * n, zero(eltype(cache.delta_v)))
+
+    return cache
+end
+
 # `δv` is the correction to the particle velocity due to the shifting.
 # Particles are advected with the velocity `v + δv`.
 @propagate_inbounds function delta_v(system, particle)

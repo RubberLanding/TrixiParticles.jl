@@ -46,22 +46,15 @@ end
         delete_candidates[particle] = false
     end
 
-    # TrixiParticles.@autoinfiltrate
-
     # Merge the particles
     for i in 1:merge_iter
-        # TrixiParticles.@autoinfiltrate
         collect_merge_candidates!(system, refinement, v, u, semi, mass_gate_factor)
-        # TrixiParticles.@autoinfiltrate
         apply_merging!(system, refinement, v, u, semi)
-        # TrixiParticles.@autoinfiltrate
 
-        # Merging creates holes that we need to fix by compacting the system
-        # so all active particles are at the beginning
-        compact_system!(system, v_ode, u_ode, semi)
+        # The merged particles are deactivated. Their slots are reused by new particles.
+        update_system_buffer!(system.buffer)
         neighborhood_search = get_neighborhood_search(system, semi)
         update_nhs!(neighborhood_search, system, system, u, u, semi)
-        # TrixiParticles.@autoinfiltrate
     end
 
     return system
@@ -70,7 +63,7 @@ end
 function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u, semi,
                                    mass_gate_factor)
     (; max_mass_factor) = refinement
-    (; reference_mass, merge_candidates, delete_candidates) = system.cache
+    (; merge_candidates, delete_candidates) = system.cache
 
     set_zero!(merge_candidates)
     system_coords = current_coordinates(u, system)
@@ -99,15 +92,13 @@ function collect_merge_candidates!(system::AbstractFluidSystem, refinement, v, u
             # Before splitting, this is `m_max`, after splitting, this is `m_min`.
             m_a = hydrodynamic_mass(system, particle)
             m_b = hydrodynamic_mass(system, neighbor)
-            m_a >= mass_gate_factor * reference_mass[particle] && return
-            m_b >= mass_gate_factor * reference_mass[neighbor] && return
+            m_a >= mass_gate_factor * reference_mass(system, particle) && return
+            m_b >= mass_gate_factor * reference_mass(system, neighbor) && return
 
             # Do not merge particles if m_a + m_b >= min(m_max_a, m_max_b)
-            m_a + m_b >=
-            max_mass_factor * min(reference_mass[particle], reference_mass[neighbor]) &&
-                return
-
-            # TrixiParticles.@autoinfiltrate
+            m_max = max_mass_factor *
+                    min(reference_mass(system, particle), reference_mass(system, neighbor))
+            m_a + m_b >= m_max && return
 
             if merge_candidates[particle] == 0
                 merge_candidates[particle] = neighbor
@@ -143,7 +134,6 @@ function apply_merging!(system::AbstractFluidSystem, refinement, v, u, semi)
         particle != merge_candidates[candidate] && return
 
         if particle < candidate
-            # TrixiParticles.@autoinfiltrate
             m_a = hydrodynamic_mass(system, particle)
             m_b = hydrodynamic_mass(system, candidate)
 

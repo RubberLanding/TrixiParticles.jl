@@ -1,259 +1,248 @@
-function Base.resize!(v_ode, u_ode, _v_ode, _u_ode, semi::Semidiscretization)
-    # This resizes the global v_ode, u_ode arrays and the ranges of the 
-    # semidiscretization, according to the new size of the systems.
-    resize!(semi, v_ode, u_ode, _v_ode, _u_ode)
+# Resizing of systems with particle refinement.
+#
+# Splitting particles needs more particles than a system was created with. Systems with
+# particle refinement and a `SystemBuffer` can therefore grow: the new particles are added
+# as inactive buffer particles at the end of the system. Systems can only grow, since
+# deleting particles only deactivates them.
 
-    # Resize the neighborhood searches in the Semidiscretization
-    resize_semi!(semi)
+"""
+    resize_systems!(v_ode, u_ode, semi, n_particles)
 
-    return semi
-end
+Resize the systems of `semi` to `n_particles[i]` particles for the `i`-th system and
+resize `v_ode` and `u_ode` accordingly. The new particles are inactive buffer particles,
+so `n_particles[i]` is the new buffer capacity of the system.
 
-function Base.resize!(semi::Semidiscretization, v_ode, u_ode, _v_ode, _u_ode)
+Only fluid systems with particle refinement and a `SystemBuffer` can be resized, and only
+to a larger number of particles. All other systems must keep their number of particles.
+
+The data of all systems in `v_ode` and `u_ode` is kept, and the neighborhood searches
+of the resized systems are recreated with the new number of particles.
+
+!!! warning
+    This changes the length of `v_ode` and `u_ode`. When called from a callback,
+    the integrator has to be resized as well.
+"""
+function resize_systems!(v_ode, u_ode, semi, n_particles)
     (; systems) = semi
 
-    # Backup current state to buffers and
-    # resize buffers to match current length before copying
-    resize!(_v_ode, length(v_ode))
-    resize!(_u_ode, length(u_ode))
-    copyto!(_v_ode, v_ode)
-    copyto!(_u_ode, u_ode)
-
-    # Calculate new ranges and sizes
-    sizes_u_new = [u_nvariables(system) * n_integrated_particles(system)
-                   for system in systems]
-    sizes_v_new = [v_nvariables(system) * n_integrated_particles(system)
-                   for system in systems]
-
-    ranges_u_new = [(sum(sizes_u_new[1:(i - 1)]) + 1):sum(sizes_u_new[1:i])
-                    for i in eachindex(sizes_u_new)]
-    ranges_v_new = [(sum(sizes_v_new[1:(i - 1)]) + 1):sum(sizes_v_new[1:i])
-                    for i in eachindex(sizes_v_new)]
-
-    size_v_new, size_u_new = sum(sizes_v_new), sum(sizes_u_new)
-
-    # Resize u and v to the new size 
-    resize!(v_ode, size_v_new)
-    resize!(u_ode, size_u_new)
-
-    # Copy from the buffer
-    for i in eachindex(systems)
-        r_u_old = semi.ranges_u[i]
-        r_v_old = semi.ranges_v[i]
-
-        r_u_new = ranges_u_new[i]
-        r_v_new = ranges_v_new[i]
-
-        # Calculate number of elements to copy
-        len_u = min(length(r_u_old), length(r_u_new))
-        len_v = min(length(r_v_old), length(r_v_new))
-
-        # Syntax: copyto!(dest, dest_offset, src, src_offset, amount)
-        if len_u > 0
-            copyto!(u_ode, first(r_u_new), _u_ode, first(r_u_old), len_u)
-        end
-        if len_v > 0
-            copyto!(v_ode, first(r_v_new), _v_ode, first(r_v_old), len_v)
-        end
-
-        # Update ranges
-        semi.ranges_u[i] = r_u_new
-        semi.ranges_v[i] = r_v_new
+    if length(n_particles) != length(systems)
+        throw(ArgumentError("`n_particles` must have one entry per system"))
     end
 
-    resize!(_v_ode, length(v_ode))
-    resize!(_u_ode, length(u_ode))
+    resized = [n_particles[i] != nparticles(systems[i]) for i in eachindex(systems)]
+    any(resized) || return semi
 
-    return v_ode
-end
+    # Check all systems before changing anything
+    for i in eachindex(systems)
+        resized[i] && check_resize(systems[i], n_particles[i], i, semi)
+    end
 
-@inline Base.resize!(system::AbstractSystem, n) = system
+    v_old = copy(v_ode)
+    u_old = copy(u_ode)
+    ranges_v_old = copy(semi.ranges_v)
+    ranges_u_old = copy(semi.ranges_u)
+    n_particles_old = [nparticles(system) for system in systems]
 
-function Base.resize!(system::AbstractFluidSystem, n)
-    return resize!(system, system.particle_refinement, n)
-end
+    for i in eachindex(systems)
+        resized[i] && resize_system!(systems[i], n_particles[i])
+    end
 
-@inline Base.resize!(system, ::Nothing, n) = system
+    # TODO: This belongs to the open boundary PR (PR 10) of the refinement PR series.
+    resize_open_boundaries!(semi, resized)
 
-function Base.resize!(system::AbstractFluidSystem, refinement, n)
-    # TrixiParticles.@autoinfiltrate
-    # Resize standard system properties
-    resize_system!(system, n)
+    # The particles of each system are stored in a contiguous range with the particle
+    # as the last dimension, so the old data is the beginning of the new range.
+    ranges_v, ranges_u = ranges_vu(systems)
+    resize!(v_ode, sum(length, ranges_v))
+    resize!(u_ode, sum(length, ranges_u))
 
-    # Resize the density
-    resize_density!(system, n, system.density_calculator)
+    for i in eachindex(systems)
+        n_v = length(ranges_v_old[i])
+        n_u = length(ranges_u_old[i])
+        view(v_ode,
+             first(ranges_v[i]):(first(ranges_v[i]) + n_v - 1)) .= view(v_old,
+                                                                        ranges_v_old[i])
+        view(u_ode,
+             first(ranges_u[i]):(first(ranges_u[i]) + n_u - 1)) .= view(u_old,
+                                                                        ranges_u_old[i])
+    end
 
-    # Resize the cache and refinement arrays
-    resize_cache!(system, n)
+    copyto!(semi.ranges_v, ranges_v)
+    copyto!(semi.ranges_u, ranges_u)
 
-    # Resize the system buffer
-    resize_system_buffer!(system.buffer, n)
+    # Initialize the new particles as inactive particles
+    foreach_system(semi) do system
+        system_index = system_indices(system, semi)
+        resized[system_index] || return
 
-    return system
-end
+        v = wrap_v(v_ode, system, semi)
+        u = wrap_u(u_ode, system, semi)
 
-@inline resize_system!(system, n) = system
+        for particle in (n_particles_old[system_index] + 1):nparticles(system)
+            initialize_inactive_particle!(system, v, u, particle)
+        end
+    end
 
-@inline function resize_system!(system::EntropicallyDampedSPHSystem, n)
-    (; mass, smoothing_length) = system
-
-    resize!(mass, n)
-    resize!(smoothing_length, n)
-
-    return system
-end
-
-@inline function resize_system!(system::WeaklyCompressibleSPHSystem, n)
-    (; mass, smoothing_length, pressure) = system
-
-    resize!(mass, n)
-    resize!(smoothing_length, n)
-    resize!(pressure, n)
-
-    return system
-end
-
-@inline function resize_density!(system, n, ::SummationDensity)
-    resize!(system.cache.density, n)
-
-    return system
-end
-
-@inline resize_density!(system, n, ::ContinuityDensity) = system
-
-function resize_cache!(system::AbstractFluidSystem, n)
-    resize_system_cache!(system, n)
-    resize_refinement_cache!(system, n)
-
-    return system
-end
-
-# TODO: Resize data specific to WCSPH cache
-function resize_system_cache!(system::WeaklyCompressibleSPHSystem, n)
-    return system.cache
-end
-
-# TODO: Resize data specific to EDAC cache
-function resize_system_cache!(system::EntropicallyDampedSPHSystem, n)
-    (; cache) = system
-    (; pressure_average, neighbor_counter, beta) = cache
-
-    resize!(pressure_average, n)
-    resize!(neighbor_counter, n)
-    resize!(beta, n)
-
-    return cache
-end
-
-function resize_refinement_cache!(system::AbstractFluidSystem, n)
-    (; is_fixed, reference_mass, _particle_spacing, _particle_spacing_tmp, candidate_flags,
-     candidate_offsets, neighbor_mass, neighbor_count, delta_v, grad_density,
-     grad_pressure, grad_velocity,
-     delete_candidates, split_candidates, merge_candidates) = system.cache
-
-    NDIMS = ndims(system)
-
-    resize!(is_fixed, n)
-    resize!(reference_mass, n)
-    resize!(_particle_spacing, n)
-    resize!(_particle_spacing_tmp, n)
-    resize!(candidate_flags, n)
-    resize!(candidate_offsets, n)
-    resize!(neighbor_mass, n)
-    resize!(neighbor_count, n)
-
-    resize!(delete_candidates, n)
-    resize!(split_candidates, n)
-    resize!(merge_candidates, n)
-
-    resize!(delta_v, n * NDIMS)
-    resize!(grad_density, n * NDIMS)
-    resize!(grad_pressure, n * NDIMS)
-    resize!(grad_velocity, n * NDIMS * NDIMS)
-
-    return system
-end
-
-@inline function resize_system_buffer!(buffer::SystemBuffer, n)
-    (; active_particle, eachparticle) = buffer
-
-    old_capacity = length(active_particle)
-    n <= old_capacity && return buffer
-
-    resize!(active_particle, n)
-    active_particle[(old_capacity + 1):end] .= false
-
-    resize!(eachparticle, n)
-
-    return buffer
-end
-
-function resize_semi!(semi::Semidiscretization)
-    resize_neighborhood_searches!(semi.neighborhood_search_handler, semi)
+    resize_neighborhood_searches!(semi.neighborhood_search_handler, semi, resized)
+    initialize_resized_neighborhood_searches!(semi, u_ode, resized)
 
     return semi
 end
 
-function resize_neighborhood_searches!(handler::PairsNHSHandler, semi)
+function check_resize(system, n, system_index, semi)
+    if !(system isa AbstractFluidSystem) || isnothing(get_refinement(system))
+        throw(ArgumentError("only fluid systems with particle refinement can be resized, " *
+                            "but the system `$(nameof(typeof(system)))` was resized"))
+    end
+
+    if !(system.buffer isa SystemBuffer)
+        throw(ArgumentError("resizing a system requires a `SystemBuffer`. " *
+                            "Pass `buffer_size` to the fluid system."))
+    end
+
+    if n < nparticles(system)
+        throw(ArgumentError("systems can only grow, but the number of particles of " *
+                            "the system `$(nameof(typeof(system)))` would change from " *
+                            "$(nparticles(system)) to $n"))
+    end
+
+    if !isnothing(system.surface_normal_method) || !isnothing(system.surface_tension)
+        throw(ArgumentError("resizing a system with surface normals or surface tension " *
+                            "is not supported yet"))
+    end
+
+    check_resize_scheme(system)
+
+    return system
+end
+
+check_resize_scheme(system) = system
+
+function check_resize_scheme(system::WeaklyCompressibleSPHSystem)
+    # TODO: This cache contains matrices, which cannot be resized
+    if system.density_diffusion isa DensityDiffusionAntuono
+        throw(ArgumentError("resizing a system with `DensityDiffusionAntuono` is not " *
+                            "supported yet"))
+    end
+
+    return system
+end
+
+# Add `n - nparticles(system)` inactive particles to the end of `system`
+function resize_system!(system::AbstractFluidSystem, n)
+    (; mass, smoothing_length, cache, density_calculator, buffer,
+     initial_condition) = system
+    refinement = get_refinement(system)
+    (; reference_density) = refinement
+
+    # The new particles are initialized like the buffer particles in `allocate_buffer`.
+    # Their values are set when they are activated.
+    spacing_new = initial_condition.particle_spacing
+    mass_new = reference_density * spacing_new^ndims(system)
+    resize_and_fill!(mass, n, mass_new)
+    resize_and_fill!(smoothing_length, n, initial_smoothing_length(system))
+
+    resize_cache_refinement!(cache, refinement, n, spacing_new)
+    resize_cache_density!(cache, density_calculator, n, reference_density)
+    resize_cache_shifting!(cache, ndims(system), n)
+    resize_scheme_data!(system, n)
+    resize_buffer!(buffer, n)
+
+    return system
+end
+
+# The open boundary stores data per particle of its fluid system
+function resize_open_boundaries!(semi, resized)
+    foreach_system(semi) do open_boundary
+        open_boundary isa OpenBoundarySystem || return
+
+        fluid_system_index = open_boundary.fluid_system_index[]
+        resized[fluid_system_index] || return
+
+        n_fluid = nparticles(semi.systems[fluid_system_index])
+        resize_and_fill!(open_boundary.fluid_candidates, n_fluid, false)
+    end
+
+    return semi
+end
+
+function initialize_inactive_particle!(system, v, u, particle)
+    (; reference_density) = get_refinement(system)
+
+    deactivate_particle!(system, particle, v, u)
+    set_particle_density!(v, system, particle, reference_density)
+    set_particle_pressure!(v, system, particle, zero(eltype(system)))
+
+    return system
+end
+
+# Recreate the neighborhood searches with resized neighbor systems for the new number of
+# particles. Note that a TLSPH self-interaction is never resized.
+function resize_neighborhood_searches!(handler::PairsNHSHandler, semi, resized)
     (; neighborhood_searches) = handler
     (; systems) = semi
 
-    # Read directly from the handler instead of using `get_neighborhood_search`,
-    # which returns the `self_interaction_nhs` for TLSPH self-interaction.
-    for (neighbor_index, neighbor) in pairs(systems), system_index in eachindex(systems)
-        nhs = neighborhood_searches[system_index, neighbor_index]
-        neighborhood_searches[system_index,
-                              neighbor_index] = copy_neighborhood_search(nhs,
-                                                                         nhs.search_radius,
-                                                                         nparticles(neighbor))
+    for neighbor_index in eachindex(systems)
+        resized[neighbor_index] || continue
+        n_points = nparticles(systems[neighbor_index])
+
+        for system_index in axes(neighborhood_searches, 1)
+            nhs = neighborhood_searches[system_index, neighbor_index]
+            neighborhood_searches[system_index,
+                                  neighbor_index] = copy_neighborhood_search(nhs,
+                                                                             PointNeighbors.search_radius(nhs),
+                                                                             n_points)
+        end
     end
 
     return handler
 end
 
-function resize_neighborhood_searches!(handler::SharedNHSHandler, semi)
+function resize_neighborhood_searches!(handler::SharedNHSHandler, semi, resized)
+    (; neighborhood_searches) = handler
     (; systems) = semi
 
-    for (neighbor_index, neighbor) in pairs(systems)
-        searches = handler.neighborhood_searches[neighbor_index]
+    for neighbor_index in eachindex(systems)
+        resized[neighbor_index] || continue
+        n_points = nparticles(systems[neighbor_index])
+        searches = neighborhood_searches[neighbor_index]
 
         for radius_index in eachindex(searches)
             nhs = searches[radius_index]
-            searches[radius_index] = copy_neighborhood_search(nhs, nhs.search_radius,
-                                                              nparticles(neighbor))
+            searches[radius_index] = copy_neighborhood_search(nhs,
+                                                              PointNeighbors.search_radius(nhs),
+                                                              n_points)
         end
     end
 
     return handler
 end
 
-function reinitialize_neighborhood_searches!(semi, u_ode)
+# Initialize the recreated neighborhood searches with the current coordinates
+function initialize_resized_neighborhood_searches!(semi, u_ode, resized)
     foreach_system(semi) do system
         foreach_system(semi) do neighbor
-            reinitialize_neighborhood_search!(semi, system, neighbor, u_ode)
+            resized[system_indices(neighbor, semi)] || return
+
+            u_system = wrap_u(u_ode, system, semi)
+            u_neighbor = wrap_u(u_ode, neighbor, semi)
+
+            PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
+                                       current_coordinates(u_system, system),
+                                       current_coordinates(u_neighbor, neighbor),
+                                       eachindex_y=each_active_particle(neighbor),
+                                       parallelization_backend=semi.parallelization_backend)
         end
     end
-    return semi
-end
-
-function reinitialize_neighborhood_search!(semi, system, neighbor, u_ode)
-    u_system = wrap_u(u_ode, system, semi)
-    u_neighbor = wrap_u(u_ode, neighbor, semi)
-
-    # TODO Initialize after adapting to the GPU.
-    # Currently, this cannot use `semi.parallelization_backend`
-    # because data is still on the CPU.   
-    PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
-                               current_coordinates(u_system, system),
-                               current_coordinates(u_neighbor, neighbor),
-                               eachindex_y=each_active_particle(neighbor),
-                               parallelization_backend=PolyesterBackend())
 
     return semi
 end
 
-function reinitialize_neighborhood_search!(semi, system::TotalLagrangianSPHSystem,
-                                           neighbor::TotalLagrangianSPHSystem, u_ode)
-    # For TLSPH, the self-interaction NHS is already initialized in the system constructor
-    return semi
+# Resize `array` to length `n` and fill the new entries with `value`
+function resize_and_fill!(array, n, value)
+    n_old = length(array)
+    resize!(array, n)
+    array[(n_old + 1):n] .= value
+
+    return array
 end

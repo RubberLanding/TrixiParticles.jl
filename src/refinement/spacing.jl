@@ -1,115 +1,89 @@
-function update_particle_spacing(semi, v_ode, u_ode)
-    foreach_system(semi) do system
-        update_particle_spacing(system, v_ode, u_ode, semi)
-    end
+# Update the target spacing of all particles that are not fixed by a refinement criterion
+# (Alg. 1 in Haftu et al., `UpdateSpacing` in their code).
+# The target spacing persists between refinement calls, so the new spacing is computed from
+# the spacing of the previous call. This way, the refinement band around the fixed particles
+# grows by one neighborhood per call.
+@inline update_target_spacing!(system, v_ode, u_ode, semi) = system
+
+@inline function update_target_spacing!(system::AbstractFluidSystem, v_ode, u_ode, semi)
+    return update_target_spacing!(system, get_refinement(system), v_ode, u_ode, semi)
 end
 
-# The methods for the `AbstractFluidSystem` are defined in `src/schemes/fluid/fluid.jl`
-@inline update_particle_spacing(system, v_ode, u_ode, semi) = system
+@inline update_target_spacing!(system, ::Nothing, v_ode, u_ode, semi) = system
 
-@inline function update_particle_spacing(system::AbstractFluidSystem, v_ode, u_ode, semi)
-    update_particle_spacing(system, system.particle_refinement, v_ode, u_ode, semi)
-end
+function update_target_spacing!(system, refinement, v_ode, u_ode, semi)
+    (; spacing_ratio, max_spacing) = refinement
+    (; target_spacing, target_spacing_tmp, is_fixed) = system.cache
 
-@inline update_particle_spacing(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
-                                semi) = system
+    u = wrap_u(u_ode, system, semi)
+    system_coords = current_coordinates(u, system)
 
-# Update the target spacing of all fluid particles that are not fixed by a criterion (Alg. 1).
-# The target spacing is persistent, so the new spacing is computed from the spacing
-# of the previous call. This way, the refinement band grows by one neighborhood per call.
-@inline function update_particle_spacing(fluid_system::AbstractFluidSystem, refinement,
-                                         v_ode, u_ode, semi)
-    (; spacing_ratio, max_spacing, reference_density) = refinement
-    (; _particle_spacing, _particle_spacing_tmp, reference_mass,
-     is_fixed) = fluid_system.cache
-
-    NDIMS = ndims(fluid_system)
-    spacing_ratio_3 = spacing_ratio^3
-
-    u = wrap_u(u_ode, fluid_system, semi)
-    system_coords = current_coordinates(u, fluid_system)
-
-    # Write to a temporary buffer, so that all particles use the spacing of the previous call
-    @threaded semi for particle in eachparticle(fluid_system)
+    # Write to a temporary array, so that all particles use the spacing of the previous call
+    @threaded semi for particle in each_integrated_particle(system)
         if is_fixed[particle]
-            _particle_spacing_tmp[particle] = _particle_spacing[particle]
+            target_spacing_tmp[particle] = target_spacing[particle]
         else
-            spacing_min, spacing_max,
-            spacing_avg = min_max_avg_spacing(fluid_system, semi, u_ode, system_coords,
-                                              particle)
-
-            # Note that `max_spacing` is the global maximum spacing and not the maximum
-            # in the neighborhood. Otherwise, a uniform region could never coarsen.
-            if spacing_max / spacing_min < spacing_ratio_3
-                new_spacing = min(max_spacing, spacing_ratio * spacing_min)
-            else
-                new_spacing = spacing_avg
-            end
-
-            _particle_spacing_tmp[particle] = new_spacing
+            target_spacing_tmp[particle] = updated_target_spacing(system, system_coords,
+                                                                  semi, particle,
+                                                                  spacing_ratio,
+                                                                  max_spacing)
         end
     end
 
-    @threaded semi for particle in eachparticle(fluid_system)
-        new_spacing = _particle_spacing_tmp[particle]
-        _particle_spacing[particle] = new_spacing
-        reference_mass[particle] = reference_density * new_spacing^NDIMS
+    @threaded semi for particle in each_integrated_particle(system)
+        target_spacing[particle] = target_spacing_tmp[particle]
     end
 
-    return fluid_system
+    return system
 end
 
-# Compute the minimum, maximum, and geometric mean of the target spacing in the neighborhood
-# around a particle. As in the reference code, only fluid neighbors are considered.
-# Boundaries enter the spacing update through the fixed particles.
-@inline function min_max_avg_spacing(system, semi, u_ode, system_coords, particle)
+@inline function updated_target_spacing(system, system_coords, semi, particle,
+                                        spacing_ratio, max_spacing)
+    spacing_min, spacing_max, spacing_avg,
+    n_neighbors = neighborhood_spacing(system, system_coords, semi, particle)
+
+    # Without neighbors, the spacing is not changed
+    n_neighbors == 0 && return system.cache.target_spacing[particle]
+
+    # In a uniform neighborhood, the spacing increases by `spacing_ratio` up to the global
+    # `max_spacing`. Otherwise, a uniform region could never coarsen.
+    if spacing_max / spacing_min < spacing_ratio^3
+        return min(max_spacing, spacing_ratio * spacing_min)
+    end
+
+    return spacing_avg
+end
+
+# Minimum, maximum and geometric mean of the target spacing of the neighbors of `particle`
+# within its compact support. As in the code of Haftu et al., the neighbors include the
+# particle itself and only the particles of the same system are considered.
+# Boundaries enter the spacing update through the particles that are fixed near them.
+@inline function neighborhood_spacing(system, system_coords, semi, particle)
+    (; target_spacing) = system.cache
     ELTYPE = eltype(system)
-    spacing_min = typemax(ELTYPE)
-    spacing_max = zero(ELTYPE)
-    log_spacing_sum = zero(ELTYPE)
-    counter_neighbors = 0
-    particle_radius = compact_support(system, system, particle)
-    backend = semi.parallelization_backend
 
-    foreach_system(semi) do neighbor_system
-        neighbor_system isa AbstractFluidSystem || return
+    radius = compact_support(system_smoothing_kernel(system),
+                             smoothing_length(system, particle))
+    neighborhood_search = get_neighborhood_search(system, semi)
 
-        u_neighbor_system = wrap_u(u_ode, neighbor_system, semi)
-        neighbor_coords = current_coordinates(u_neighbor_system, neighbor_system)
-        neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
+    # Minimum, maximum, sum of the logarithms and number of neighbors
+    init = (typemax(ELTYPE), zero(ELTYPE), zero(ELTYPE), 0)
+    op(a, b) = (min(a[1], b[1]), max(a[2], b[2]), a[3] + b[3], a[4] + b[4])
 
-        @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                   neighborhood_search, backend,
-                                   particle;
-                                   search_radius=particle_radius) do particle, neighbor,
-                                                                     _, _
-            neighbor_spacing = target_spacing(neighbor_system, neighbor)
-            spacing_min = min(spacing_min, neighbor_spacing)
-            spacing_max = max(spacing_max, neighbor_spacing)
-            log_spacing_sum += log(neighbor_spacing)
-            counter_neighbors += 1
-        end
+    spacing_min, spacing_max, log_spacing_sum,
+    n_neighbors = mapreduce_neighbor(op, system_coords, system_coords,
+                                     neighborhood_search, semi.parallelization_backend,
+                                     particle; init) do particle, neighbor, _, distance
+        distance > radius && return init
+
+        spacing = target_spacing[neighbor]
+
+        return (spacing, spacing, log(spacing), 1)
     end
 
-    if counter_neighbors == 0
-        spacing_particle = target_spacing(system, particle)
-        return spacing_particle, spacing_particle, spacing_particle
-    end
-
-    # Geometric mean as in the reference code. Summing the logarithms instead of
+    # Geometric mean as in the code of Haftu et al. Summing the logarithms instead of
     # multiplying the spacings avoids an underflow of the product for many neighbors.
-    spacing_avg = exp(log_spacing_sum / counter_neighbors)
+    spacing_avg = exp(log_spacing_sum / max(n_neighbors, 1))
 
-    return spacing_min, spacing_max, spacing_avg
-end
-
-# The persistent target spacing for systems with refinement, the actual spacing otherwise
-@inline function target_spacing(system, particle)
-    return target_spacing(system, get_refinement(system), particle)
-end
-
-@inline target_spacing(system, ::Nothing, particle) = particle_spacing(system, particle)
-
-@inline function target_spacing(system, refinement, particle)
-    return system.cache._particle_spacing[particle]
+    return spacing_min, spacing_max, spacing_avg, n_neighbors
 end

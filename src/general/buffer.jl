@@ -54,6 +54,19 @@ end
     return buffer
 end
 
+# Add inactive particles to the end of the buffer until it has `n` particles
+function resize_buffer!(buffer::SystemBuffer, n)
+    (; active_particle, eachparticle) = buffer
+
+    resize_and_fill!(active_particle, n, false)
+
+    n_old = length(eachparticle)
+    resize!(eachparticle, n)
+    eachparticle[(n_old + 1):n] .= (n_old + 1):n
+
+    return buffer
+end
+
 @inline each_integrated_particle(system, buffer) = each_active_particle(system, buffer)
 
 @inline function active_coordinates(u, system, buffer)
@@ -62,26 +75,6 @@ end
 
 @inline function each_active_particle(system, buffer)
     return view(buffer.eachparticle, 1:buffer.active_particle_count[])
-end
-
-@inline function each_active_particle(system::AbstractFluidSystem, ::Nothing)
-    return Base.OneTo(nparticles(system))
-end
-
-@inline function each_active_particle(system::AbstractFluidSystem, buffer)
-    return each_active_particle(system, system.particle_refinement, buffer)
-end
-
-@inline function each_active_particle(system::AbstractFluidSystem, ::Nothing, buffer)
-    return view(buffer.eachparticle, 1:buffer.active_particle_count[])
-end
-
-# When using refinement together with a buffer, we assume that the system is 
-# always sorted via `compact_system!`, before calling `each_active_particle`. 
-# We do that because `eachpoint` of `TrivialNeighborhoodSearch` is a UnitRange
-# by default, when initialized. By returning a view, we get a TypeError. 
-@inline function each_active_particle(system::AbstractFluidSystem, refinement, buffer)
-    return 1:buffer.active_particle_count[]
 end
 
 @inline function deactivate_particle!(system, particle, v, u)

@@ -1,246 +1,231 @@
-function split_particles!(semi, v_ode, u_ode, _v_ode, _u_ode)
-    resize = false
+"""
+    split_particles!(semi, v_ode, u_ode)
+
+Split all particles of fluid systems with particle refinement whose mass is larger than
+`max_mass_factor` times the mass that corresponds to their target spacing
+(Alg. 2 in Haftu et al.). The new particles are activated in free slots of the
+`SystemBuffer`, which is resized when it is almost full.
+
+!!! warning
+    This can change the length of `v_ode` and `u_ode` (see `resize_systems!`).
+"""
+function split_particles!(semi, v_ode, u_ode)
+    n_new_particles = zeros(Int, length(semi.systems))
 
     foreach_system(semi) do system
-        !isa(system, AbstractFluidSystem) && return
-        isnothing(system.particle_refinement) && return
-        (; buffer, particle_refinement, cache) = system
-        (; active_particle, active_particle_count) = buffer
-
-        n_new_particles = collect_split_candidates!(system, particle_refinement, v_ode,
-                                                    u_ode, semi)
-        # TrixiParticles.@autoinfiltrate
-        current_capacity = length(active_particle)
-        required_capacity = active_particle_count[] + n_new_particles
-
-        # TrixiParticles.@autoinfiltrate
-
-        if required_capacity > 0.95 * current_capacity
-            resize = true
-            new_capacity = max(round(Int, 1.25 * current_capacity),
-                               required_capacity + buffer.buffer_size)
-            # TrixiParticles.@autoinfiltrate
-
-            resize!(system, new_capacity)
-        end
+        n_new_particles[system_indices(system, semi)] = collect_split_candidates!(system,
+                                                                                  u_ode,
+                                                                                  semi)
     end
 
-    # TrixiParticles.@autoinfiltrate
+    sum(n_new_particles) == 0 && return semi
 
-    if resize
-
-        # Check for each OpenBoundarySystem whether
-        # its fluid system got resized. If so, resize the
-        # boundary system as well
-        foreach_system(semi) do open_system
-            !isa(open_system, OpenBoundarySystem) && return
-            fluid_capacity = nparticles(open_system.fluid_system)
-            open_capacity = nparticles(open_system)
-
-            if fluid_capacity > open_capacity
-                resize!(open_system.fluid_candidates, fluid_capacity)
-            end
-        end
-
-        # Global resize of the semidiscretization 
-        resize!(v_ode, u_ode, _v_ode, _u_ode, semi)
-    end
-
-    # TrixiParticles.@autoinfiltrate
+    capacities = [split_capacity(system, n_new_particles[i])
+                  for (i, system) in enumerate(semi.systems)]
+    resize_systems!(v_ode, u_ode, semi, capacities)
 
     foreach_system(semi) do system
-        !isa(system, AbstractFluidSystem) && return
-        isnothing(system.particle_refinement) && return
-        (; buffer, particle_refinement, cache) = system
+        n_new_particles[system_indices(system, semi)] > 0 || return
 
-        v = wrap_v(v_ode, system, semi)
-        u = wrap_u(u_ode, system, semi)
-
-        # We just expanded the global v_ode and u_ode arrays with `resize!`, 
-        # meaning the tails of these arrays are filled with garbage data
-        # We overwrite this data by explictly deactivating all inactive particles
-        capacity = nparticles(system)
-        for particle in (buffer.active_particle_count[] + 1):capacity
-            TrixiParticles.deactivate_particle!(system, particle, v, u)
-
-            # TODO
-            # Initialize pressure/density rows if they exist in EDAC
-            for dim in (ndims(system) + 1):size(v, 1)
-                v[dim, particle] = 0.0
-            end
-        end
+        apply_splitting!(system, v_ode, u_ode, semi)
     end
 
-    # Reinitialize the searches after we deactivate 
-    # the extra buffer particles
-    reinitialize_neighborhood_searches!(semi, u_ode)
-
-    foreach_system(semi) do system
-        !isa(system, AbstractFluidSystem) && return
-        isnothing(system.particle_refinement) && return
-        (; buffer, particle_refinement) = system
-
-        v = wrap_v(v_ode, system, semi)
-        u = wrap_u(u_ode, system, semi)
-
-        apply_splitting!(system, particle_refinement, v, u, semi)
-
-        # Update the nhs for the fluid-fluid self-interaction, 
-        # so the following merge finds the new particles
-        update_system_buffer!(buffer)
-        nhs = get_neighborhood_search(system, semi)
-        update_nhs!(nhs, system, system, u, u, semi)
-    end
-
-    # TrixiParticles.@autoinfiltrate
+    # The neighborhood searches have to find the new particles
+    update_nhs!(semi, u_ode)
 
     return semi
 end
 
-@inline function collect_split_candidates!(system::AbstractFluidSystem, refinement, v_ode,
-                                           u_ode,
-                                           semi)
-    (; splitting_pattern, max_mass_factor) = refinement
-    (; epsilon) = splitting_pattern
-    (; reference_mass, split_candidates, delete_candidates) = system.cache
+# Return the number of new particles
+@inline collect_split_candidates!(system, u_ode, semi) = 0
 
-    split_candidates .= false
-    @threaded semi for particle in eachparticle(system)
-        is_alive = !delete_candidates[particle]
-        particle_mass = hydrodynamic_mass(system, particle)
-        particle_mass_max = max_mass_factor * reference_mass[particle]
-        split_candidates[particle] = is_alive && (particle_mass > particle_mass_max)
-    end
-
-    u = wrap_u(u_ode, system, semi)
-    system_coords = current_coordinates(u, system)
-    backend = semi.parallelization_backend
-
-    # Loop over the neighboring systems to avoid race condition
-    # when writing `split_candidates`
-    foreach_system(semi) do neighbor_system
-        !isa(neighbor_system, Union{AbstractBoundarySystem, AbstractStructureSystem}) &&
-            return
-
-        neighbor_system_spacing = neighbor_system.initial_condition.particle_spacing
-
-        u_neighbor = wrap_u(u_ode, neighbor_system, semi)
-        neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
-        neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
-
-        @threaded semi for particle in eachparticle(system)
-            !split_candidates[particle] && return
-
-            # The children are placed at `epsilon * h` around the parent (see `apply_splitting!`).
-            # Note that `h / particle_spacing` is not constant, since the smoothing length
-            # is set from the average neighbor mass (Eq. 35).
-            split_radius = epsilon * smoothing_length(system, particle)
-            min_distance = split_radius + 0.05 * neighbor_system_spacing
-            particle_radius = compact_support(system, system, particle)
-
-            @inbounds foreach_neighbor(system_coords, neighbor_coords,
-                                       neighborhood_search, backend,
-                                       particle;
-                                       search_radius=particle_radius) do particle, neighbor,
-                                                                         _, distance
-                if distance < min_distance
-                    split_candidates[particle] = false
-                end
-            end
-        end
-    end
-
-    # Do not split a particle if one of its children would be placed in an open boundary zone,
-    # where it would immediately be converted to an open boundary particle.
-    # Note that `OpenBoundarySystem` is not an `AbstractBoundarySystem`.
-    (; relative_position) = splitting_pattern
-    foreach_system(semi) do neighbor_system
-        neighbor_system isa OpenBoundarySystem || return
-        (; boundary_zones) = neighbor_system
-
-        @threaded semi for particle in eachparticle(system)
-            !split_candidates[particle] && return
-
-            pos_particle = current_coords(u, system, particle)
-            h = smoothing_length(system, particle)
-
-            for child_offset in relative_position
-                child_pos = pos_particle + h * child_offset
-
-                foreach_noalloc(boundary_zones) do boundary_zone
-                    if is_in_boundary_zone(boundary_zone, child_pos)
-                        split_candidates[particle] = false
-                    end
-                end
-            end
-        end
-    end
-
-    n_childs_exclude_center = nchilds(splitting_pattern) - 1
-    total_new_particles = sum(split_candidates) * n_childs_exclude_center
-
-    return total_new_particles
+@inline function collect_split_candidates!(system::AbstractFluidSystem, u_ode, semi)
+    return collect_split_candidates!(system, get_refinement(system), u_ode, semi)
 end
 
-@inline function apply_splitting!(system::AbstractFluidSystem, particle_refinement, v, u,
-                                  semi)
-    (; splitting_pattern) = particle_refinement
-    (; candidate_flags, candidate_offsets, reference_mass, _particle_spacing,
-     split_candidates) = system.cache
-    (; alpha, relative_position) = splitting_pattern
-    (; active_particle, active_particle_count) = system.buffer
+@inline collect_split_candidates!(system, ::Nothing, u_ode, semi) = 0
 
-    @threaded semi for particle in eachindex(split_candidates)
-        candidate_flags[particle] = split_candidates[particle] ? 1 : 0
+function collect_split_candidates!(system, refinement, u_ode, semi)
+    (; split_candidate) = system.cache
+    (; max_mass_factor, splitting_pattern) = refinement
+
+    set_zero!(split_candidate)
+
+    @threaded semi for particle in each_integrated_particle(system)
+        mass = hydrodynamic_mass(system, particle)
+        split_candidate[particle] = mass >
+                                    max_mass_factor * reference_mass(system, particle)
     end
 
-    cumsum!(candidate_offsets, candidate_flags)
+    foreach_system(semi) do neighbor_system
+        skip_splitting_near_boundary!(system, neighbor_system, u_ode, semi)
+    end
 
-    n_childs_exclude_center = nchilds(splitting_pattern) - 1
-    n_childs = nchilds(splitting_pattern)
-    buffer_start_idx = active_particle_count[]
+    n_new_per_particle = n_split_particles(splitting_pattern, Val(ndims(system))) - 1
 
-    @threaded semi for particle in eachparticle(system)
-        !split_candidates[particle] && return
+    return count(split_candidate) * n_new_per_particle
+end
 
-        smoothing_length_old = smoothing_length(system, particle)
-        smoothing_length_new = smoothing_length_old * alpha
-        set_particle_smoothing_length!(system, particle, smoothing_length_new)
+@inline skip_splitting_near_boundary!(system, neighbor_system, u_ode, semi) = system
 
-        mass_old = hydrodynamic_mass(system, particle)
-        mass_new = mass_old / n_childs
-        set_particle_mass!(system, particle, mass_new)
+# Do not split a particle if one of the new particles would be closer to a boundary particle
+# than half of the boundary particle spacing. With dummy particles, the boundary surface is
+# half a particle spacing in front of the boundary particles, so this prevents new particles
+# on or behind the boundary surface.
+# TODO: This rule is not safe. It measures the distance to the boundary particles,
+# not to the boundary surface. Inside the boundary, a point between two neighboring
+# boundary particles is `Δs_b / 2` away from both, and a point in the center of a grid cell
+# of boundary particles is `Δs_b / √2` away from all corners. Both pass this check.
+# The new particles are placed `epsilon * h` away from the particle, which can be much
+# larger than `Δs_b` for coarse particles, so they can end up at exactly these positions.
+# A safer rule would be a boundary fraction `φ(x) = Σ_b V_b W(x - x_b)` with `V_b = Δs_b^d`,
+# which is about 0.5 at a flat boundary surface and about 1 inside the boundary.
+function skip_splitting_near_boundary!(system,
+                                       neighbor_system::Union{WallBoundarySystem,
+                                                              AbstractStructureSystem},
+                                       u_ode, semi)
+    (; split_candidate) = system.cache
+    (; splitting_pattern) = get_refinement(system)
+    (; epsilon) = splitting_pattern
 
-        rho_particle = particle_refinement.reference_density
-        # rho_particle = current_density(v, system, particle) # Not reliable for EDAC
+    directions = split_directions(splitting_pattern, Val(ndims(system)))
+    min_distance = neighbor_system.initial_condition.particle_spacing / 2
 
-        reference_mass_particle = reference_mass[particle]
-        spacing_particle = _particle_spacing[particle]
-        pos_particle = current_coords(u, system, particle)
-        vel_particle = current_velocity(v, system, particle)
+    u = wrap_u(u_ode, system, semi)
+    u_neighbor = wrap_u(u_ode, neighbor_system, semi)
+    system_coords = current_coordinates(u, system)
+    neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
 
-        pressure_particle = current_pressure(v, system, particle)
+    # Note that each thread only writes to its own `particle`
+    foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords, semi;
+                           points=each_integrated_particle(system)) do particle, _,
+                                                                       pos_diff, _
+        split_candidate[particle] || return
 
-        particle_offset = (candidate_offsets[particle] - 1) * n_childs_exclude_center
-        for child_id_local in 1:n_childs_exclude_center
-            global_child_idx = buffer_start_idx + particle_offset + child_id_local
-
-            rel_pos = smoothing_length_old * relative_position[child_id_local]
-            new_pos = pos_particle + rel_pos
-
-            set_particle_mass!(system, global_child_idx, mass_new)
-            set_particle_smoothing_length!(system, global_child_idx, smoothing_length_new)
-            set_particle_density!(v, system, global_child_idx, rho_particle)
-            set_particle_velocity!(v, system, global_child_idx, vel_particle)
-            set_particle_position!(u, system, global_child_idx, new_pos)
-            set_particle_pressure!(v, system, global_child_idx, pressure_particle)
-
-            # The children inherit the persistent target spacing of the parent
-            reference_mass[global_child_idx] = reference_mass_particle
-            _particle_spacing[global_child_idx] = spacing_particle
-            active_particle[global_child_idx] = true
+        # `pos_diff` is the position of `particle` relative to the boundary particle
+        offset = epsilon * smoothing_length(system, particle)
+        for direction in directions
+            if norm(pos_diff + offset * direction) < min_distance
+                split_candidate[particle] = false
+            end
         end
     end
+
+    return system
+end
+
+# Do not split a particle if one of the new particles would be placed in an open boundary
+# zone, where it would immediately be converted to an open boundary particle.
+# TODO: This belongs to the open boundary PR (PR 10) of the refinement PR series.
+function skip_splitting_near_boundary!(system, neighbor_system::OpenBoundarySystem,
+                                       u_ode, semi)
+    # Only the fluid system of the open boundary converts particles
+    neighbor_system.fluid_system_index[] == system_indices(system, semi) || return system
+
+    (; split_candidate) = system.cache
+    (; splitting_pattern) = get_refinement(system)
+    (; epsilon) = splitting_pattern
+    (; boundary_zones) = neighbor_system
+
+    directions = split_directions(splitting_pattern, Val(ndims(system)))
+    u = wrap_u(u_ode, system, semi)
+
+    @threaded semi for particle in each_integrated_particle(system)
+        split_candidate[particle] || return
+
+        position = current_coords(u, system, particle)
+        offset = epsilon * smoothing_length(system, particle)
+
+        for direction in directions
+            new_position = position + offset * direction
+
+            foreach_noalloc(boundary_zones) do boundary_zone
+                if is_in_boundary_zone(boundary_zone, new_position)
+                    split_candidate[particle] = false
+                end
+            end
+        end
+    end
+
+    return system
+end
+
+@inline split_capacity(system, n_new_particles) = nparticles(system)
+
+# Grow the buffer when the new particles would fill more than 95% of it
+function split_capacity(system::AbstractFluidSystem, n_new_particles)
+    n_new_particles == 0 && return nparticles(system)
+
+    (; buffer) = system
+    if !(buffer isa SystemBuffer)
+        throw(ArgumentError("splitting particles requires a `SystemBuffer`. " *
+                            "Pass `buffer_size` to the fluid system."))
+    end
+
+    capacity = nparticles(system)
+    n_required = buffer.active_particle_count[] + n_new_particles
+
+    n_required > 0.95 * capacity || return capacity
+
+    return max(round(Int, 1.25 * capacity), n_required + buffer.buffer_size)
+end
+
+function apply_splitting!(system, v_ode, u_ode, semi)
+    (; splitting_pattern) = get_refinement(system)
+    (; epsilon, alpha) = splitting_pattern
+    (; split_candidate, target_spacing) = system.cache
+    (; active_particle) = system.buffer
+
+    v = wrap_v(v_ode, system, semi)
+    u = wrap_u(u_ode, system, semi)
+
+    directions = split_directions(splitting_pattern, Val(ndims(system)))
+    n_new_per_particle = length(directions)
+    n_split = n_new_per_particle + 1
+
+    # The new particles of the `i`-th candidate are activated in the free slots
+    # `(i - 1) * n_new_per_particle + 1` to `i * n_new_per_particle`
+    candidates = findall(split_candidate)
+    free_slots = findall(!, active_particle)
+    @assert length(free_slots) >= length(candidates) * n_new_per_particle
+
+    @threaded semi for i in eachindex(candidates)
+        particle = candidates[i]
+
+        h = smoothing_length(system, particle)
+        mass = hydrodynamic_mass(system, particle) / n_split
+        position = current_coords(u, system, particle)
+        velocity = current_velocity(v, system, particle)
+        # TODO: The density of EDAC with `SummationDensity` is the one of the last
+        # right-hand side evaluation. Check if this causes problems.
+        density = current_density(v, system, particle)
+        pressure = current_pressure(v, system, particle)
+        spacing = target_spacing[particle]
+
+        # The particle itself stays in the center (Vacondio et al. 2016)
+        set_particle_mass!(system, particle, mass)
+        set_particle_smoothing_length!(system, particle, alpha * h)
+
+        # As in the code of Haftu et al., the new particles copy the properties
+        # of the particle
+        for j in 1:n_new_per_particle
+            new_particle = free_slots[(i - 1) * n_new_per_particle + j]
+            new_position = position + epsilon * h * directions[j]
+
+            set_particle_position!(u, system, new_particle, new_position)
+            set_particle_velocity!(v, system, new_particle, velocity)
+            set_particle_density!(v, system, new_particle, density)
+            set_particle_pressure!(v, system, new_particle, pressure)
+            set_particle_mass!(system, new_particle, mass)
+            set_particle_smoothing_length!(system, new_particle, alpha * h)
+            target_spacing[new_particle] = spacing
+
+            active_particle[new_particle] = true
+        end
+    end
+
+    update_system_buffer!(system.buffer)
+    set_zero!(split_candidate)
 
     return system
 end

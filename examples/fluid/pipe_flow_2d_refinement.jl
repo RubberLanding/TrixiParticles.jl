@@ -216,8 +216,6 @@ saving_callback = SolutionSavingCallback(interval=1, prefix="")
 
 extra_callback = nothing
 
-v_tmp = similar(ode.u0.x[1])
-u_tmp = similar(ode.u0.x[2])
 startup_done = Ref(false)
 function apply_refinement!(integrator)
     v_ode = integrator.u.x[1]
@@ -227,11 +225,11 @@ function apply_refinement!(integrator)
 
     # Build the graded spacing field before the first time step
     if !startup_done[]
-        TrixiParticles.refinement_startup!(semi, v_ode, u_ode, v_tmp, u_tmp)
+        TrixiParticles.refinement_startup!(semi, v_ode, u_ode)
         startup_done[] = true
     end
 
-    TrixiParticles.refinement!(semi, v_ode, u_ode, v_tmp, u_tmp)
+    TrixiParticles.refinement!(semi, v_ode, u_ode)
     # TrixiParticles.@autoinfiltrate
 
     if length(u_ode) > length_u_before

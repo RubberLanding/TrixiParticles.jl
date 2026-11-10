@@ -1,7 +1,5 @@
-mutable struct ParticleRefinementCallback{I, V, U}
+struct ParticleRefinementCallback{I}
     interval::I
-    v_tmp::V
-    u_tmp::U
 end
 
 function ParticleRefinementCallback(; interval::Integer=-1, dt=0.0)
@@ -15,8 +13,7 @@ function ParticleRefinementCallback(; interval::Integer=-1, dt=0.0)
         interval = 1
     end
 
-    # Initialize the callback with `nothing` for the arrays initially
-    refinement_callback = ParticleRefinementCallback(interval, nothing, nothing)
+    refinement_callback = ParticleRefinementCallback(interval)
 
     if dt > 0
         return PeriodicCallback(refinement_callback, dt,
@@ -44,32 +41,20 @@ end
 
 # affect
 function (refinement_callback::ParticleRefinementCallback)(integrator)
-    t = integrator.t
     semi = integrator.p.semi
     v_ode, u_ode = integrator.u.x
 
-    # Only allocate the backup arrays once, 
-    # or if v_ode and u_ode expanded after a deep resize
-    if isnothing(refinement_callback.v_tmp) ||
-       length(refinement_callback.v_tmp) < length(v_ode)
-        refinement_callback.v_tmp = similar(v_ode)
-        refinement_callback.u_tmp = similar(u_ode)
-    end
-
-    v_tmp = refinement_callback.v_tmp
-    u_tmp = refinement_callback.u_tmp
-
     length_u_before = length(u_ode)
 
-    refinement!(semi, v_ode, u_ode, v_tmp, u_tmp, integrator, t)
+    refinement!(semi, v_ode, u_ode)
 
-    # Only resize the integrator if the refinement triggered a resize
+    # Only resize the integrator if the refinement resized the systems
     if length(u_ode) > length_u_before
         resize!(integrator, (length(v_ode), length(u_ode)))
     end
 
-    # Force the solver to recalculate derivatives 
-    # due to compaction, particle splitting and particle merging
+    # Force the solver to recalculate derivatives
+    # due to particle splitting, merging and shifting
     SciMLBase.derivative_discontinuity!(integrator, true)
 
     return integrator

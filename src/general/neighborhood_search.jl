@@ -50,30 +50,11 @@ function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
         end
 
         if count(system.buffer.active_particle) != system.buffer.active_particle_count[]
-            # Delegate the cleanup to our dispatch helper
-            deactivation_cleanup(system, v_ode, u_ode, semi)
+            update_system_buffer!(system.buffer)
         end
     end
 
     return system
-end
-
-@inline function deactivation_cleanup(system, v_ode, u_ode, semi)
-    update_system_buffer!(system.buffer)
-end
-
-@inline function deactivation_cleanup(system::AbstractFluidSystem, v_ode, u_ode, semi)
-    deactivation_cleanup(system, system.particle_refinement, v_ode, u_ode, semi)
-end
-
-@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement::Nothing,
-                                      v_ode, u_ode, semi)
-    update_system_buffer!(system.buffer)
-end
-
-@inline function deactivation_cleanup(system::AbstractFluidSystem, refinement, v_ode, u_ode,
-                                      semi)
-    compact_system!(system, v_ode, u_ode, semi)
 end
 
 @propagate_inbounds function foreach_neighbor(f, system_coords, neighbor_coords,

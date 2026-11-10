@@ -1,156 +1,349 @@
-@testset "Test Resize for Systems and Semidiscretization" begin
-    function create_test_system(n_particles_per_dim)
-        particle_spacing = 0.1
-        width = particle_spacing * n_particles_per_dim
-        height = particle_spacing * n_particles_per_dim
-        density = 257
-        smoothing_kernel = SchoenbergCubicSplineKernel{2}()
-        smoothing_length = 1.5 * particle_spacing
-        state_equation = StateEquationCole(sound_speed=10, reference_density=density,
-                                           exponent=7)
+@testset verbose=true "Resize" begin
+    smoothing_kernel = WendlandC2Kernel{2}()
+    sound_speed = 10.0
+    reference_density = 1000.0
+    state_equation = StateEquationCole(; sound_speed, reference_density, exponent=7)
+    refinement = TrixiParticles.ParticleRefinement(; spacing_ratio=1.2, min_spacing=0.05,
+                                                   max_spacing=0.1, reference_density)
+    particle_spacing = 0.1
+    smoothing_length = 1.2 * particle_spacing
 
-        tank = RectangularTank(particle_spacing, (width, height), (width, height),
-                               density, n_layers=1, faces=(true, true, true, false))
+    tank = RectangularTank(particle_spacing, (0.5, 0.5), (0.7, 0.7), reference_density;
+                           n_layers=3)
+    boundary_model = BoundaryModelDummyParticles(tank.boundary.density, tank.boundary.mass,
+                                                 AdamiPressureExtrapolation(),
+                                                 smoothing_kernel, smoothing_length;
+                                                 state_equation)
 
-        n_particles = prod(tank.n_particles_per_dimension)
-        buffer = ResizeBuffer(tank.fluid)
-        refinement = ParticleRefinement(n_particles=n_particles,
-                                        spacing_ratio=1.05,
-                                        min_spacing=particle_spacing,
-                                        resize_buffer=buffer)
+    # A second fluid without refinement next to the tank, which is not resized
+    other_fluid = RectangularShape(particle_spacing, (3, 3), (0.8, 0.1);
+                                   density=reference_density)
 
-        density_calculator = SummationDensity()
-        fluid_system = WeaklyCompressibleSPHSystem(tank.fluid; density_calculator,
-                                                   state_equation, smoothing_kernel,
-                                                   smoothing_length,
-                                                   particle_refinement=refinement)
-        boundary_model = BoundaryModelDummyParticles(tank.boundary.density,
-                                                     tank.boundary.mass,
-                                                     state_equation=state_equation,
-                                                     AdamiPressureExtrapolation(),
-                                                     smoothing_kernel, smoothing_length)
-        boundary_system = WallBoundarySystem(tank.boundary, boundary_model)
-
-        fluid_system.cache.density .= tank.fluid.density
-        return fluid_system, boundary_system
+    function wcsph(fluid; density_calculator=ContinuityDensity(), kwargs...)
+        return WeaklyCompressibleSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                           state_equation, density_calculator, kwargs...)
     end
 
-    fluid_system_expand, boundary_system_expand = create_test_system(11)
-    fluid_system_constant, boundary_system_constant = create_test_system(12)
-    fluid_system_shrink, boundary_system_shrink = create_test_system(13)
-
-    n_particles_expand = TrixiParticles.nparticles(fluid_system_expand)
-    n_particles_shrink = TrixiParticles.nparticles(fluid_system_shrink)
-    n_particles_constant = TrixiParticles.nparticles(fluid_system_constant)
-
-    u_vars = TrixiParticles.u_nvariables(fluid_system_expand)
-
-    semi = Semidiscretization(fluid_system_expand, fluid_system_constant,
-                              fluid_system_shrink,
-                              boundary_system_expand, boundary_system_constant,
-                              boundary_system_shrink)
-    ode = semidiscretize(semi, (0.0, 1.0))
-
-    v_ode, u_ode = ode.u0.x
-    v_tmp, u_tmp = similar.(ode.u0.x)
-    len_v_original, len_u_original = length(v_ode), length(u_ode)
-
-    # Prepare shrinking system 
-    refinement_shrink = fluid_system_shrink.particle_refinement
-    fill!(refinement_shrink.delete_candidates, false)
-    refinement_shrink.delete_candidates[[2, 4, 6, 8]] .= true
-
-    refinement_shrink.resize_buffer.n_delete_particles[1] = 4
-    refinement_shrink.resize_buffer.n_add_particles[1] = 1
-    refinement_shrink.resize_buffer.n_new_particles[1] = n_particles_shrink - 3
-    refinement_shrink.n_current_particles[1] = n_particles_shrink
-
-    TrixiParticles.resize_buffer!(refinement_shrink.resize_buffer, fluid_system_shrink, 1)
-    refinement_shrink.resize_buffer.masses_new .= 111.0
-
-    # Prepare expanding system 
-    refinement_expand = fluid_system_expand.particle_refinement
-    fill!(refinement_expand.delete_candidates, false)
-    refinement_expand.delete_candidates[[3, 7]] .= true
-
-    refinement_expand.resize_buffer.n_delete_particles[1] = 2
-    refinement_expand.resize_buffer.n_add_particles[1] = 5
-    refinement_expand.resize_buffer.n_new_particles[1] = n_particles_expand + 3
-    refinement_expand.n_current_particles[1] = n_particles_expand
-
-    TrixiParticles.resize_buffer!(refinement_expand.resize_buffer, fluid_system_expand, 5)
-    refinement_expand.resize_buffer.masses_new .= 222.0
-
-    # Prepare constant system 
-    refinement_constant = fluid_system_constant.particle_refinement
-    fill!(refinement_constant.delete_candidates, false)
-    refinement_constant.delete_candidates[[1, 5, 9]] .= true
-
-    refinement_constant.resize_buffer.n_delete_particles[1] = 3
-    refinement_constant.resize_buffer.n_add_particles[1] = 3
-    refinement_constant.resize_buffer.n_new_particles[1] = n_particles_constant
-    refinement_constant.n_current_particles[1] = n_particles_constant
-
-    TrixiParticles.resize_buffer!(refinement_constant.resize_buffer, fluid_system_constant,
-                                  3)
-    refinement_constant.resize_buffer.masses_new .= 333.0
-
-    # Apply global resize
-    TrixiParticles.resize!(v_ode, u_ode, v_tmp, u_tmp, semi)
-
-    @testset "Global Memory Boundaries" begin
-        # Total number of particles in the simulation should not change 
-        expected_total_particles = n_particles_expand + n_particles_shrink +
-                                   n_particles_constant
-        @test length(u_ode) == len_u_original
-
-        # Test if the ranges got updated correctly
-        fluid_system_expand_expected_end = (n_particles_expand + 3) * u_vars
-        fluid_system_constant_expected_end = fluid_system_expand_expected_end +
-                                             (n_particles_constant * u_vars)
-        fluid_system_shrink_expected_end = fluid_system_constant_expected_end +
-                                           (n_particles_shrink - 3) * u_vars
-
-        @test semi.ranges_u[1] == 1:fluid_system_expand_expected_end
-        @test semi.ranges_u[2] ==
-              (fluid_system_expand_expected_end + 1):fluid_system_constant_expected_end
-        @test semi.ranges_u[3] ==
-              (fluid_system_constant_expected_end + 1):fluid_system_shrink_expected_end
+    function edac(fluid; kwargs...)
+        return EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
+                                           sound_speed, kwargs...)
     end
 
-    @testset " Test Shrinking System" begin
-        @test TrixiParticles.nparticles(fluid_system_shrink) == n_particles_shrink - 3
-        @test fluid_system_shrink.particle_refinement.n_current_particles[1] ==
-              n_particles_shrink - 3
+    # The default update strategy does not support inactive particles
+    grid_nhs = GridNeighborhoodSearch{2}(update_strategy=SerialUpdate())
 
-        # The single added particle should have overwritten the first deleted index (2)
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_shrink, 2), 111.0)
+    function semidiscretize_systems(systems...; neighborhood_search=grid_nhs,
+                                    neighborhood_search_handler=SharedNHSHandler)
+        semi = Semidiscretization(systems...; neighborhood_search,
+                                  neighborhood_search_handler,
+                                  parallelization_backend=SerialBackend())
+        ode = semidiscretize(semi, (0.0, 0.1))
+        v_ode, u_ode = ode.u0.x
+
+        return v_ode, u_ode, ode.p
     end
 
-    @testset "Test Expanding System" begin
-        @test TrixiParticles.nparticles(fluid_system_expand) == n_particles_expand + 3
-        @test fluid_system_expand.particle_refinement.n_current_particles[1] ==
-              n_particles_expand + 3
+    function rhs(v_ode, u_ode, p)
+        dv_ode = zero(v_ode)
+        TrixiParticles.kick!(dv_ode, v_ode, u_ode, p, 0.0)
 
-        # The first 2 added particles overwrite indices 3 and 7
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_expand, 3), 222.0)
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_expand, 7), 222.0)
-
-        # The remaining 3 appended sequentially to the end
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_expand,
-                                                        n_particles_expand + 1), 222.0)
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_expand,
-                                                        n_particles_expand + 3), 222.0)
+        return dv_ode
     end
 
-    @testset "Test Constant System" begin
-        @test TrixiParticles.nparticles(fluid_system_constant) == n_particles_constant
-        @test fluid_system_constant.particle_refinement.n_current_particles[1] ==
-              n_particles_constant
+    setups = [
+        ("WCSPH with `ContinuityDensity`",
+         () -> wcsph(tank.fluid; density_calculator=ContinuityDensity(),
+                     particle_refinement=refinement, buffer_size=4)),
+        ("WCSPH with `SummationDensity`",
+         () -> wcsph(tank.fluid; density_calculator=SummationDensity(),
+                     particle_refinement=refinement, buffer_size=4)),
+        ("EDAC with `ContinuityDensity`",
+         () -> edac(tank.fluid; density_calculator=ContinuityDensity(),
+                    particle_refinement=refinement, buffer_size=4)),
+        ("EDAC with `SummationDensity` and Average Pressure Reduction",
+         () -> edac(tank.fluid; average_pressure_reduction=true,
+                    particle_refinement=refinement, buffer_size=4))
+    ]
 
-        # The 3 added particles replaced the 3 deleted indices 
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_constant, 1), 333.0)
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_constant, 5), 333.0)
-        @test isapprox(TrixiParticles.hydrodynamic_mass(fluid_system_constant, 9), 333.0)
+    full_grid_nhs = GridNeighborhoodSearch{2}(cell_list=FullGridCellList(min_corner=(-0.5,
+                                                                                     -0.5),
+                                                                         max_corner=(1.5,
+                                                                                     1.5)),
+                                              update_strategy=ParallelUpdate())
+
+    # This neighborhood search loops over the number of points it was created with,
+    # so it only finds the new particles after it has been recreated.
+    trivial_nhs = TrivialNeighborhoodSearch{2}()
+
+    neighborhood_searches = [
+        ("`GridNeighborhoodSearch`, `SharedNHSHandler`", grid_nhs, SharedNHSHandler),
+        ("`GridNeighborhoodSearch`, `PairsNHSHandler`", grid_nhs, PairsNHSHandler),
+        ("`FullGridCellList`, `SharedNHSHandler`", full_grid_nhs, SharedNHSHandler),
+        ("`TrivialNeighborhoodSearch`, `SharedNHSHandler`", trivial_nhs,
+         SharedNHSHandler),
+        ("`TrivialNeighborhoodSearch`, `PairsNHSHandler`", trivial_nhs, PairsNHSHandler)
+    ]
+
+    @testset verbose=true "$name, $nhs_name" for (name, create_fluid) in setups,
+                                                 (nhs_name, neighborhood_search,
+                                                  neighborhood_search_handler) in
+                                                 neighborhood_searches
+
+        v_ode, u_ode,
+        p = semidiscretize_systems(create_fluid(),
+                                   WallBoundarySystem(tank.boundary, boundary_model),
+                                   wcsph(other_fluid;
+                                         density_calculator=ContinuityDensity());
+                                   neighborhood_search, neighborhood_search_handler)
+        (; semi) = p
+        fluid_system, boundary_system, other_system = semi.systems
+
+        # Use a non-trivial state for the active particles
+        n_old = nparticles(fluid_system)
+        active = collect(TrixiParticles.each_active_particle(fluid_system))
+        v_fluid = TrixiParticles.wrap_v(v_ode, fluid_system, semi)
+        u_fluid = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
+        for particle in active
+            v_fluid[1, particle] = sin(particle)
+            v_fluid[2, particle] = cos(particle)
+            u_fluid[1, particle] += 0.01 * sin(2 * particle)
+        end
+
+        v_fluid_old = copy(v_fluid)
+        u_fluid_old = copy(u_fluid)
+        v_other_old = copy(TrixiParticles.wrap_v(v_ode, other_system, semi))
+        u_other_old = copy(TrixiParticles.wrap_u(u_ode, other_system, semi))
+        dv_ode_old = rhs(v_ode, u_ode, p)
+        dv_fluid_old = copy(TrixiParticles.wrap_v(dv_ode_old, fluid_system, semi))
+        dv_other_old = copy(TrixiParticles.wrap_v(dv_ode_old, other_system, semi))
+
+        n_new = n_old + 7
+        TrixiParticles.resize_systems!(v_ode, u_ode, semi,
+                                       [n_new, nparticles(boundary_system),
+                                           nparticles(other_system)])
+
+        v_fluid = TrixiParticles.wrap_v(v_ode, fluid_system, semi)
+        u_fluid = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
+
+        @testset "Number of Particles" begin
+            (; buffer) = fluid_system
+
+            @test nparticles(fluid_system) == n_new
+            @test length(buffer.active_particle) == n_new
+            @test length(buffer.eachparticle) == n_new
+            @test TrixiParticles.each_active_particle(fluid_system) == active
+            @test TrixiParticles.smoothing_length(fluid_system) isa Vector
+            @test length(TrixiParticles.smoothing_length(fluid_system)) == n_new
+        end
+
+        @testset "Ranges" begin
+            n_v = TrixiParticles.v_nvariables(fluid_system)
+            n_u = TrixiParticles.u_nvariables(fluid_system)
+
+            @test semi.ranges_v[1] == 1:(n_v * n_new)
+            @test semi.ranges_u[1] == 1:(n_u * n_new)
+            @test first(semi.ranges_v[3]) == last(semi.ranges_v[1]) + 1
+            @test first(semi.ranges_u[3]) == last(semi.ranges_u[1]) + 1
+            @test length(v_ode) == last(semi.ranges_v[3])
+            @test length(u_ode) == last(semi.ranges_u[3])
+        end
+
+        @testset "Data is Kept" begin
+            @test v_fluid[:, 1:n_old] == v_fluid_old
+            @test u_fluid[:, 1:n_old] == u_fluid_old
+            @test TrixiParticles.wrap_v(v_ode, other_system, semi) == v_other_old
+            @test TrixiParticles.wrap_u(u_ode, other_system, semi) == u_other_old
+        end
+
+        @testset "New Particles are Inactive" begin
+            new_particles = (n_old + 1):n_new
+            spacing = tank.fluid.particle_spacing
+
+            @test !any(fluid_system.buffer.active_particle[new_particles])
+            @test all(==(1e16), u_fluid[:, new_particles])
+            @test iszero(TrixiParticles.current_velocity(v_fluid, fluid_system)[:,
+                                                                                new_particles])
+            @test all(==(reference_density),
+                      TrixiParticles.current_density(v_fluid, fluid_system)[new_particles])
+            @test iszero(TrixiParticles.current_pressure(v_fluid,
+                                                         fluid_system)[new_particles])
+            @test all(≈(reference_density * spacing^2), fluid_system.mass[new_particles])
+            @test all(==(smoothing_length),
+                      TrixiParticles.smoothing_length(fluid_system)[new_particles])
+        end
+
+        @testset "Right-Hand Side is Unchanged" begin
+            dv_ode = rhs(v_ode, u_ode, p)
+            dv_fluid = TrixiParticles.wrap_v(dv_ode, fluid_system, semi)
+
+            @test any(!iszero, dv_fluid_old)
+            @test isapprox(dv_fluid[:, 1:n_old], dv_fluid_old, rtol=1e-12)
+            @test iszero(dv_fluid[:, (n_old + 1):n_new])
+            @test isapprox(TrixiParticles.wrap_v(dv_ode, other_system, semi),
+                           dv_other_old, rtol=1e-12)
+        end
+
+        @testset "Resize Again" begin
+            TrixiParticles.resize_systems!(v_ode, u_ode, semi,
+                                           [n_new + 3, nparticles(boundary_system),
+                                               nparticles(other_system)])
+
+            v_fluid = TrixiParticles.wrap_v(v_ode, fluid_system, semi)
+            dv_ode = rhs(v_ode, u_ode, p)
+            dv_fluid = TrixiParticles.wrap_v(dv_ode, fluid_system, semi)
+
+            @test nparticles(fluid_system) == n_new + 3
+            @test v_fluid[:, 1:n_old] == v_fluid_old
+            @test isapprox(dv_fluid[:, 1:n_old], dv_fluid_old, rtol=1e-12)
+        end
+
+        @testset "Activated New Particle Interacts" begin
+            (; buffer) = fluid_system
+            v_fluid = TrixiParticles.wrap_v(v_ode, fluid_system, semi)
+            u_fluid = TrixiParticles.wrap_u(u_ode, fluid_system, semi)
+
+            # Activate the last new particle next to the first particle
+            particle = nparticles(fluid_system)
+            position = u_fluid[:, 1] + [0.03, 0.04]
+            TrixiParticles.set_particle_position!(u_fluid, fluid_system, particle, position)
+            TrixiParticles.set_particle_velocity!(v_fluid, fluid_system, particle,
+                                                  [1.0, 0.0])
+            buffer.active_particle[particle] = true
+            TrixiParticles.update_system_buffer!(buffer)
+
+            dv_ode = rhs(v_ode, u_ode, p)
+            dv_fluid = TrixiParticles.wrap_v(dv_ode, fluid_system, semi)
+
+            @test any(!iszero, dv_fluid[:, particle])
+
+            # The first particle finds the new particle as a neighbor
+            @test !isapprox(dv_fluid[:, 1], dv_fluid_old[:, 1])
+        end
+    end
+
+    @testset verbose=true "Unchanged Number of Particles" begin
+        v_ode, u_ode,
+        p = semidiscretize_systems(wcsph(tank.fluid; particle_refinement=refinement,
+                                         buffer_size=4))
+        length_v = length(v_ode)
+
+        TrixiParticles.resize_systems!(v_ode, u_ode, p.semi,
+                                       [nparticles(p.semi.systems[1])])
+
+        @test length(v_ode) == length_v
+    end
+
+    @testset verbose=true "Rejected" begin
+        function test_rejected(error_str, create_fluid, n_extra=1)
+            v_ode, u_ode,
+            p = semidiscretize_systems(create_fluid(),
+                                       WallBoundarySystem(tank.boundary, boundary_model))
+            (; semi) = p
+            fluid_system, boundary_system = semi.systems
+            length_v, length_u = length(v_ode), length(u_ode)
+            n_fluid = nparticles(fluid_system)
+
+            @test_throws error_str TrixiParticles.resize_systems!(v_ode, u_ode, semi,
+                                                                  [n_fluid + n_extra,
+                                                                      nparticles(boundary_system)
+                                                                  ])
+
+            # Nothing was changed
+            @test length(v_ode) == length_v
+            @test length(u_ode) == length_u
+            @test nparticles(fluid_system) == n_fluid
+        end
+
+        @testset "Without Refinement" begin
+            test_rejected("only fluid systems with particle refinement can be resized",
+                          () -> wcsph(tank.fluid; buffer_size=4))
+        end
+
+        @testset "Without Buffer" begin
+            test_rejected("resizing a system requires a `SystemBuffer`",
+                          () -> wcsph(tank.fluid; particle_refinement=refinement))
+        end
+
+        @testset "Shrinking" begin
+            test_rejected("systems can only grow",
+                          () -> wcsph(tank.fluid; particle_refinement=refinement,
+                                      buffer_size=4), -1)
+        end
+
+        @testset "Surface Normals" begin
+            test_rejected("resizing a system with surface normals or surface tension",
+                          () -> wcsph(tank.fluid; particle_refinement=refinement,
+                                      buffer_size=4,
+                                      surface_normal_method=ColorfieldSurfaceNormal(),
+                                      reference_particle_spacing=particle_spacing))
+        end
+
+        @testset "`DensityDiffusionAntuono`" begin
+            density_diffusion = DensityDiffusionAntuono(; delta=0.1)
+            test_rejected("resizing a system with `DensityDiffusionAntuono`",
+                          () -> wcsph(tank.fluid; particle_refinement=refinement,
+                                      buffer_size=4, density_diffusion))
+        end
+
+        @testset "Boundary System" begin
+            v_ode, u_ode,
+            p = semidiscretize_systems(wcsph(tank.fluid; particle_refinement=refinement,
+                                             buffer_size=4),
+                                       WallBoundarySystem(tank.boundary, boundary_model))
+            fluid_system, boundary_system = p.semi.systems
+
+            @test_throws "only fluid systems with particle refinement can be resized" TrixiParticles.resize_systems!(v_ode,
+                                                                                                                     u_ode,
+                                                                                                                     p.semi,
+                                                                                                                     [
+                                                                                                                         nparticles(fluid_system),
+                                                                                                                         nparticles(boundary_system) +
+                                                                                                                         1
+                                                                                                                     ])
+        end
+
+        @testset "Wrong Number of Entries" begin
+            v_ode, u_ode,
+            p = semidiscretize_systems(wcsph(tank.fluid; particle_refinement=refinement,
+                                             buffer_size=4))
+
+            @test_throws "`n_particles` must have one entry per system" TrixiParticles.resize_systems!(v_ode,
+                                                                                                       u_ode,
+                                                                                                       p.semi,
+                                                                                                       [
+                                                                                                           1,
+                                                                                                           2
+                                                                                                       ])
+        end
+    end
+
+    # TODO: Integration only. On the PR branches, resizing throws for shifting (until the
+    # shifting PR, PR 8) and for fluids with an open boundary (until PR 10).
+    @testset verbose=true "Shifting and Open Boundary" begin
+        # With shifting, the zone must be at least two compact supports wide
+        fluid_system = edac(tank.fluid; particle_refinement=refinement, buffer_size=4,
+                            shifting_technique=ParticleShiftingTechnique())
+        boundary_zone = BoundaryZone(; boundary_face=([0.0, 0.0], [0.0, 0.5]),
+                                     face_normal=[1.0, 0.0], boundary_type=InFlow(),
+                                     open_boundary_layers=5, density=reference_density,
+                                     particle_spacing)
+        open_boundary = OpenBoundarySystem(boundary_zone; fluid_system, buffer_size=4,
+                                           boundary_model=BoundaryModelDynamicalPressureZhang())
+
+        v_ode, u_ode, p = semidiscretize_systems(fluid_system, open_boundary)
+        fluid_system, open_boundary = p.semi.systems
+
+        n_old = nparticles(fluid_system)
+        fluid_system.cache.delta_v .= 1:length(fluid_system.cache.delta_v)
+        delta_v_old = copy(fluid_system.cache.delta_v)
+
+        n_new = n_old + 7
+        TrixiParticles.resize_systems!(v_ode, u_ode, p.semi,
+                                       [n_new, nparticles(open_boundary)])
+
+        @test length(fluid_system.cache.delta_v) == 2 * n_new
+        @test fluid_system.cache.delta_v[1:(2 * n_old)] == delta_v_old
+        @test iszero(fluid_system.cache.delta_v[(2 * n_old + 1):end])
+        @test length(open_boundary.fluid_candidates) == n_new
     end
 end
