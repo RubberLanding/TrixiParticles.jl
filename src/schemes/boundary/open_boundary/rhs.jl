@@ -32,6 +32,10 @@ function interact!(dv, v_particle_system, u_particle_system,
             h_b = smoothing_length(neighbor_system, neighbor)
             h_ab = (h_a + h_b) / 2
 
+            # The pair can be in the compact support of the larger smoothing length,
+            # but outside of the compact support of the average smoothing length.
+            distance >= compact_support(particle_system_kernel, h_ab) && return
+
             # Now that we know that `distance` is not zero, we can safely call the unsafe
             # version of the kernel gradient to avoid redundant zero checks.
             grad_kernel = kernel_grad_unsafe(particle_system_kernel, pos_diff, distance,

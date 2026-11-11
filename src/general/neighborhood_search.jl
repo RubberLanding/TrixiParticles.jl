@@ -101,6 +101,14 @@ end
     return compact_support(smoothing_kernel, initial_smoothing_length(system))
 end
 
+@inline function compact_support(system::AbstractFluidSystem, neighbor)
+    (; smoothing_kernel) = system
+
+    # With particle refinement, this is the largest smoothing length a particle can have,
+    # since the search radius is never changed after the neighborhood search is created.
+    return compact_support(smoothing_kernel, search_smoothing_length(system))
+end
+
 @inline function compact_support(system::AbstractFluidSystem, neighbor, particle)
     (; smoothing_kernel) = system
 
@@ -111,6 +119,28 @@ end
 @inline function compact_support(system::OpenBoundarySystem, neighbor, point)
     # The open boundary particle always uses the system's global constant smoothing length
     return compact_support(system.smoothing_kernel, initial_smoothing_length(system))
+end
+
+@inline function compact_support(system::OpenBoundarySystem,
+                                 neighbor::AbstractFluidSystem)
+    compact_support_ = compact_support(system.smoothing_kernel,
+                                       initial_smoothing_length(system))
+
+    # Fluid particles with a variable smoothing length can reach further than the
+    # open boundary particles. The open boundary weights its fluid neighbors with the
+    # average smoothing length of both particles, so it must find all fluid particles
+    # within the compact support of the largest fluid smoothing length.
+    # Open boundary particles can also carry the smoothing length of a fluid particle
+    # that left the fluid domain.
+    has_variable_smoothing_length(neighbor) || return compact_support_
+
+    return max(compact_support_, compact_support(neighbor, system))
+end
+
+@inline function compact_support(system::OpenBoundarySystem,
+                                 neighbor::AbstractFluidSystem, point)
+    # This is also the explicit search radius of the mirroring around the ghost nodes
+    return compact_support(system, neighbor)
 end
 
 @inline function compact_support(system::OpenBoundarySystem,

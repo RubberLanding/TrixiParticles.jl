@@ -40,6 +40,76 @@ function default_n_startup_rounds(spacing_ratio, min_spacing, max_spacing)
     return 3 * max(n_levels, 1)
 end
 
+# The largest smoothing length a particle can have with this refinement.
+# Eq. 35 computes the smoothing length from the average mass of the neighbors.
+# Particles above `max_mass_factor` times the reference mass are split, and the target
+# spacing of the reference mass is at most `max_spacing`.
+@inline function max_smoothing_length(system)
+    (; max_spacing, max_mass_factor) = get_refinement(system)
+
+    return spacing_to_smoothing_length(system,
+                                       max_mass_factor^(1 / ndims(system)) * max_spacing)
+end
+
+# The smoothing length that determines the search radius of the neighborhood searches
+@inline function search_smoothing_length(system)
+    return search_smoothing_length(system, get_refinement(system))
+end
+
+@inline search_smoothing_length(system, ::Nothing) = initial_smoothing_length(system)
+
+@inline function search_smoothing_length(system, refinement)
+    # The initial particles can be coarser than `max_spacing`.
+    # They are split in `refinement_startup!`.
+    return max(initial_smoothing_length(system), max_smoothing_length(system))
+end
+
+# Warn if a neighborhood search of a fluid with refinement has a smaller search radius
+# than the compact support of the largest smoothing length a particle can have.
+# Such a search silently misses neighbors of the coarsest particles.
+# The search radius is only chosen when the neighborhood searches are created, since
+# `update_nhs!` and `resize_systems!` keep it. So it is enough to check it here.
+#
+# Note that this does not cover all particles. Some particles can still exceed
+# `max_smoothing_length` at runtime, and nothing checks this yet:
+# - Particles whose split is skipped near a boundary (see `split_particles!`) keep their
+#   mass. This only exceeds the maximum if the initial particles are coarser than
+#   `max_mass_factor^(1 / ndims) * max_spacing`. The search radius covers this case,
+#   since it also uses the initial particle spacing (see `search_smoothing_length`).
+# - Particles that enter from an open boundary get the spacing of the open boundary.
+# - The smoothing length of a merged particle (Eq. 34) is only replaced by Eq. 35
+#   in `shift_particles!`.
+function check_refinement_search_radii(semi)
+    foreach_system(semi) do system
+        isnothing(get_refinement(system)) && return
+
+        # The initial smoothing lengths are passed by the user and are not limited
+        # by the refinement, so they are checked as well.
+        h_max = max(max_smoothing_length(system), maximum(smoothing_length(system)))
+        required_radius = compact_support(system_smoothing_kernel(system), h_max)
+
+        foreach_system(semi) do neighbor
+            # Interactions in both directions need the support of the fluid particles
+            for (system_, neighbor_) in ((system, neighbor), (neighbor, system))
+                nhs = get_neighborhood_search(system_, neighbor_, semi)
+                search_radius = PointNeighbors.search_radius(nhs)
+
+                # A search radius of zero is used for neighborhood searches that are never used
+                if 0 < search_radius < required_radius
+                    @warn "the neighborhood search of the system " *
+                          "`$(nameof(typeof(system_)))` with the neighbor system " *
+                          "`$(nameof(typeof(neighbor_)))` has the search radius " *
+                          "$search_radius, which is smaller than the compact support " *
+                          "$required_radius of the largest smoothing length possible with " *
+                          "particle refinement. Neighbors of coarse particles will be missed."
+                end
+            end
+        end
+    end
+
+    return semi
+end
+
 """
     refinement!(semi, v_ode, u_ode)
 
