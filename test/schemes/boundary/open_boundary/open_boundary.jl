@@ -30,7 +30,7 @@ include("pressure_model.jl")
                                        boundary_model=BoundaryModelDynamicalPressureZhang())
     open_boundary.boundary_zone_indices .= 1
 
-    # The shifting velocities are stored in a flat vector
+    # `delta_v` is stored as a flat vector with two entries per particle
     delta_v = reshape(open_boundary.cache.delta_v, 2, :)
 
     unmodified_delta_v = [1.0, -2.0]
@@ -50,8 +50,7 @@ include("pressure_model.jl")
     dist_from_cutoff = 2 * compact_support - distances_from_free_surface[3]
     shifting_weight = TrixiParticles.smoothing_kernel(open_boundary, dist_from_cutoff,
                                                       3) / kernel_max
-    @test isapprox(delta_v[:, 3],
-                   unmodified_delta_v * shifting_weight)
+    @test isapprox(delta_v[:, 3], unmodified_delta_v * shifting_weight)
 
     @test delta_v[:, 4] == unmodified_delta_v
 end

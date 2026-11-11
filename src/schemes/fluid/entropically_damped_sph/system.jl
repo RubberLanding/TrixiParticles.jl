@@ -149,8 +149,7 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
     nu_edac = (alpha * smoothing_length * sound_speed) / 8
 
     cache = (; create_cache_density(initial_condition, density_calculator)...,
-             create_cache_shifting(initial_condition, shifting_technique,
-                                   particle_refinement)...,
+             create_cache_shifting(initial_condition, shifting_technique)...,
              create_cache_refinement(initial_condition, particle_refinement)...,
              create_cache_beta(initial_condition, particle_refinement)...,
              create_cache_avg_pressure_reduction(initial_condition,

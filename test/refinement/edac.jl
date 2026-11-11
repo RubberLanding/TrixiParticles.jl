@@ -329,12 +329,11 @@
             end
         end
 
-        # TODO: This term belongs to the shifting PR (PR 8) of the refinement PR series
         @testset "Shifting Term in the Pressure Evolution" begin
             p = 50.0
 
             function shifting_term(pressure_acceleration)
-                shifting_technique = TransportVelocityAdami(background_pressure=1.0)
+                shifting_technique = ParticleShiftingTechnique(update_everystage=true)
                 system = edac_system(pair; pressure_acceleration, shifting_technique,
                                      average_pressure_reduction=false)
                 _, semi = rhs(system; smoothing_lengths=(h_a, h_b))

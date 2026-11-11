@@ -8,7 +8,7 @@ struct ParticleRefinement{ELTYPE, RC, SP, SC}
     splitting_pattern       :: SP
     max_mass_factor         :: ELTYPE # Particles above `max_mass_factor * m_ref` are split
     min_mass_factor         :: ELTYPE # Only particles below `min_mass_factor * m_ref` merge after splitting
-    shifting_technique      :: SC
+    shifting_technique      :: SC     # Shifting after splitting and merging, see `shift_particles!`
     n_startup_rounds        :: Int    # Number of refinement rounds in `refinement_startup!`
 end
 
@@ -17,7 +17,7 @@ function ParticleRefinement(; spacing_ratio, min_spacing, max_spacing, reference
                             refinement_criteria=SpatialRefinementCriterion(),
                             splitting_pattern=HexagonalSplitting(),
                             max_mass_factor=1.05, min_mass_factor=0.5,
-                            shifting_technique=ParticleShiftingTechniqueSun2017(),
+                            shifting_technique=ShiftingHaftu(),
                             n_startup_rounds=default_n_startup_rounds(spacing_ratio,
                                                                       min_spacing,
                                                                       max_spacing))
@@ -75,12 +75,8 @@ function refinement!(semi, v_ode, u_ode)
     merge_particles!(semi, v_ode, u_ode)
 
     # Shift the particles and correct the particle properties.
-    # This also updates the smoothing lengths (Eq. 35).
-    foreach_system(semi) do system
-        shift_particles!(system, v_ode, u_ode, semi)
-    end
-
-    update_nhs!(semi, u_ode)
+    # This also updates the smoothing lengths (Eq. 35) and all neighborhood searches.
+    shift_particles!(semi, v_ode, u_ode)
 
     return semi
 end
@@ -107,8 +103,8 @@ create_cache_refinement(initial_condition, ::Nothing) = (;)
 function create_cache_refinement(initial_condition, refinement)
     (; reference_density) = refinement
     n_particles = nparticles(initial_condition)
-    ELTYPE = eltype(initial_condition)
     NDIMS = ndims(initial_condition)
+    ELTYPE = eltype(initial_condition)
 
     # The target spacing persists between refinement calls (see `update_target_spacing!`).
     # Initialize it with the spacing that corresponds to the initial mass.
@@ -126,41 +122,46 @@ function create_cache_refinement(initial_condition, refinement)
     # The merge partner of each particle in the current merge round, 0 without a partner
     merge_partner = zeros(Int, n_particles)
 
-    # Smoothing length update (Eq. 35)
-    neighbor_mass = zeros(ELTYPE, n_particles)
-    neighbor_count = zeros(Int, n_particles)
+    # Shifting after splitting and merging (see `shift_particles!`).
+    # Vectors are stored as flat vectors with `NDIMS` entries per particle.
+    # The shift of the current iteration
+    shift = zeros(ELTYPE, NDIMS * n_particles)
+    # The sum of the shifts of all iterations
+    total_shift = zeros(ELTYPE, NDIMS * n_particles)
+    # The shift of the current iteration divided by the smoothing length
+    relative_shift = zeros(ELTYPE, n_particles)
 
-    # Property corrections after shifting
-    grad_density = zeros(ELTYPE, NDIMS * n_particles)
-    grad_pressure = zeros(ELTYPE, NDIMS * n_particles)
-    grad_velocity = zeros(ELTYPE, NDIMS * NDIMS * n_particles)
+    # The corrections of the particle properties after shifting (Eq. 37)
+    velocity_correction = zeros(ELTYPE, NDIMS * n_particles)
+    pressure_correction = zeros(ELTYPE, n_particles)
+    density_correction = zeros(ELTYPE, n_particles)
 
-    return (; target_spacing, target_spacing_tmp, is_fixed, split_candidate,
-            merge_partner, neighbor_mass, neighbor_count,
-            grad_density, grad_pressure, grad_velocity)
+    return (; target_spacing, target_spacing_tmp, is_fixed, split_candidate, merge_partner,
+            shift, total_shift, relative_shift, velocity_correction, pressure_correction,
+            density_correction)
 end
 
-resize_cache_refinement!(cache, ::Nothing, n, spacing) = cache
+resize_cache_refinement!(cache, ::Nothing, NDIMS, n, spacing) = cache
 
 # The new particles get the target spacing `spacing`
-function resize_cache_refinement!(cache, refinement, n, spacing)
-    (; target_spacing, target_spacing_tmp, is_fixed, split_candidate,
-     merge_partner, neighbor_mass, neighbor_count,
-     grad_density, grad_pressure, grad_velocity) = cache
-    NDIMS = div(length(grad_density), length(target_spacing))
+function resize_cache_refinement!(cache, refinement, NDIMS, n, spacing)
+    (; target_spacing, target_spacing_tmp, is_fixed, split_candidate, merge_partner,
+     shift, total_shift, relative_shift, velocity_correction, pressure_correction,
+     density_correction) = cache
+    ELTYPE = eltype(target_spacing)
 
     resize_and_fill!(target_spacing, n, spacing)
     resize_and_fill!(target_spacing_tmp, n, spacing)
     resize_and_fill!(is_fixed, n, false)
     resize_and_fill!(split_candidate, n, false)
-
     resize_and_fill!(merge_partner, n, 0)
-    resize_and_fill!(neighbor_mass, n, zero(eltype(neighbor_mass)))
-    resize_and_fill!(neighbor_count, n, 0)
 
-    resize_and_fill!(grad_density, NDIMS * n, zero(eltype(grad_density)))
-    resize_and_fill!(grad_pressure, NDIMS * n, zero(eltype(grad_pressure)))
-    resize_and_fill!(grad_velocity, NDIMS^2 * n, zero(eltype(grad_velocity)))
+    resize_and_fill!(shift, NDIMS * n, zero(ELTYPE))
+    resize_and_fill!(total_shift, NDIMS * n, zero(ELTYPE))
+    resize_and_fill!(relative_shift, n, zero(ELTYPE))
+    resize_and_fill!(velocity_correction, NDIMS * n, zero(ELTYPE))
+    resize_and_fill!(pressure_correction, n, zero(ELTYPE))
+    resize_and_fill!(density_correction, n, zero(ELTYPE))
 
     return cache
 end
@@ -170,56 +171,6 @@ end
     (; reference_density) = get_refinement(system)
 
     return reference_density * system.cache.target_spacing[particle]^ndims(system)
-end
-
-@inline update_smoothing_lengths!(system, v_ode, u_ode, semi) = system
-
-@inline function update_smoothing_lengths!(system::AbstractFluidSystem, v_ode, u_ode, semi)
-    return update_smoothing_lengths!(system, system.particle_refinement, v_ode, u_ode, semi)
-end
-
-@inline update_smoothing_lengths!(system::AbstractFluidSystem, ::Nothing, v_ode, u_ode,
-                                  semi) = system
-
-function update_smoothing_lengths!(system::AbstractFluidSystem, refinement, v_ode, u_ode,
-                                   semi)
-    (; smoothing_length_factor, reference_density) = refinement
-    (; neighbor_mass, neighbor_count) = system.cache
-
-    u = wrap_u(u_ode, system, semi)
-    system_coords = current_coordinates(u, system)
-    set_zero!(neighbor_mass)
-    set_zero!(neighbor_count)
-
-    ELTYPE = eltype(u)
-    inv_ndims = one(ELTYPE) / ndims(system)
-
-    neighborhood_search = get_neighborhood_search(system, semi)
-    backend = semi.parallelization_backend
-
-    @threaded semi for particle in eachparticle(system)
-        particle_radius = compact_support(system, system, particle)
-        @inbounds foreach_neighbor(system_coords, system_coords,
-                                   neighborhood_search, backend,
-                                   particle;
-                                   search_radius=particle_radius) do particle, neighbor, _,
-                                                                     _
-            neighbor_mass[particle] += hydrodynamic_mass(system, neighbor)
-            neighbor_count[particle] += 1
-        end
-    end
-
-    # Update the smoothing length with the average neighborhood mass (Eq. 35)
-    @threaded semi for particle in eachparticle(system)
-        neighbor_count[particle] == 0 && return
-
-        avg_volume = neighbor_mass[particle] *
-                     (one(ELTYPE) / (neighbor_count[particle] * reference_density))
-        new_smoothing_length = smoothing_length_factor * (avg_volume)^inv_ndims
-        set_particle_smoothing_length!(system, particle, new_smoothing_length)
-    end
-
-    return system
 end
 
 # A particle that is activated in a fluid system, e.g. by an inflow, gets the target spacing
@@ -241,16 +192,6 @@ end
     is_fixed[particle] = false
 
     return system
-end
-
-# For Vectors (e.g., delta_v, grad_density, grad_pressure)
-@inline function linear_index_vector(i, particle, NDIMS)
-    return (particle - 1) * NDIMS + i
-end
-
-# For Matrices/Tensors (e.g., grad_velocity)
-@inline function linear_index_matrix(i, j, particle, NDIMS)
-    return (particle - 1) * NDIMS * NDIMS + (j - 1) * NDIMS + i
 end
 
 include("refinement_criteria.jl")

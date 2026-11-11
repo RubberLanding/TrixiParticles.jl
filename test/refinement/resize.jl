@@ -40,6 +40,9 @@
         ode = semidiscretize(semi, (0.0, 0.1))
         v_ode, u_ode = ode.u0.x
 
+        # The shifting velocity is set manually instead of in the `UpdateCallback`
+        ode.p.semi.update_callback_used[] = true
+
         return v_ode, u_ode, ode.p
     end
 
@@ -62,6 +65,11 @@
                     particle_refinement=refinement, buffer_size=4)),
         ("EDAC with `SummationDensity` and Average Pressure Reduction",
          () -> edac(tank.fluid; average_pressure_reduction=true,
+                    particle_refinement=refinement, buffer_size=4)),
+        # The shifting velocity is only updated in the `UpdateCallback`,
+        # so the right-hand side uses the values in the cache.
+        ("EDAC with Shifting",
+         () -> edac(tank.fluid; shifting_technique=ParticleShiftingTechnique(),
                     particle_refinement=refinement, buffer_size=4))
     ]
 
@@ -109,6 +117,12 @@
             u_fluid[1, particle] += 0.01 * sin(2 * particle)
         end
 
+        has_shifting = !isnothing(TrixiParticles.shifting_technique(fluid_system))
+        if has_shifting
+            fluid_system.cache.delta_v .= 0.1 .* cos.(eachindex(fluid_system.cache.delta_v))
+        end
+        delta_v_old = has_shifting ? copy(fluid_system.cache.delta_v) : nothing
+
         v_fluid_old = copy(v_fluid)
         u_fluid_old = copy(u_fluid)
         v_other_old = copy(TrixiParticles.wrap_v(v_ode, other_system, semi))
@@ -153,6 +167,13 @@
             @test u_fluid[:, 1:n_old] == u_fluid_old
             @test TrixiParticles.wrap_v(v_ode, other_system, semi) == v_other_old
             @test TrixiParticles.wrap_u(u_ode, other_system, semi) == u_other_old
+
+            if has_shifting
+                (; delta_v) = fluid_system.cache
+                @test length(delta_v) == 2 * n_new
+                @test delta_v[1:(2 * n_old)] == delta_v_old
+                @test iszero(delta_v[(2 * n_old + 1):end])
+            end
         end
 
         @testset "New Particles are Inactive" begin
@@ -317,8 +338,8 @@
         end
     end
 
-    # TODO: Integration only. On the PR branches, resizing throws for shifting (until the
-    # shifting PR, PR 8) and for fluids with an open boundary (until PR 10).
+    # TODO: Integration only. On the PR branches, resizing throws for fluids with an
+    # open boundary (until PR 10).
     @testset verbose=true "Shifting and Open Boundary" begin
         # With shifting, the zone must be at least two compact supports wide
         fluid_system = edac(tank.fluid; particle_refinement=refinement, buffer_size=4,

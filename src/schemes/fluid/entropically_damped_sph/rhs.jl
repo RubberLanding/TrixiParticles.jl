@@ -226,30 +226,30 @@ end
                                      distance, m_a, m_b, p_a, p_b, rho_a, rho_b,
                                      beta_damping, nu_edac)
 
-    # TODO: This term belongs to the shifting PR (PR 8) of the refinement PR series.
-    # Correction term due to shifting, `(û - u) ⋅ ∇p` in the code of Haftu et al.
-    # Note that both `p_a` and `p_b` have to be reduced by the average pressure of
-    # `particle`, as in the code of Haftu et al., because reducing each pressure by the
-    # average of its own particle would cancel the pressure gradient.
-    # The `beta` of `particle` follows the same rule as in the damping term.
+    # Correction term due to shifting, `(û - u) ⋅ ∇p` in the code of Haftu et al.,
+    # where `û - u` is the shifting velocity `δv`.
+    # As in their code, both `p_a` and `p_b` are reduced by the average pressure of
+    # `particle`, and the `beta` of `particle` follows the same rule as in the damping term.
     p_avg = average_pressure(particle_system, particle)
     grad_pressure = edac_shifting_pressure_gradient(formulation, m_a, m_b,
                                                     p_a - p_avg, p_b - p_avg,
                                                     rho_a, rho_b, beta_damping,
                                                     get_beta(neighbor_system, neighbor),
                                                     grad_kernel_a, grad_kernel_b)
-    shifting_correction = dot(delta_v(particle_system, particle), grad_pressure)
+    shifting_term = dot(delta_v(particle_system, particle), grad_pressure)
 
     # Pressure is stored in `v` right after the velocity
     dv[ndims(particle_system) + 1,
-       particle] += artificial_eos + damping_term + shifting_correction
+       particle] += artificial_eos + damping_term +
+                    shifting_term
 
     return dv
 end
 
 # Pressure gradient in the shifting term of `EDACEquation2` and `EDACEquationSolids2`
-# in the code of Haftu et al. This is the form of `pressure_acceleration_summation_density`
-# for all formulations except `inter_particle_averaged_pressure`.
+# in the code of Haftu et al. This is the negative of
+# `pressure_acceleration_summation_density` for all formulations except
+# `inter_particle_averaged_pressure`.
 # The asymmetric version of the formulation expects `W_b` to be evaluated at `-pos_diff`.
 @inline function edac_shifting_pressure_gradient(formulation, m_a, m_b, p_a, p_b,
                                                  rho_a, rho_b, beta_a, beta_b,

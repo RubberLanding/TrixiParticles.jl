@@ -102,7 +102,7 @@ function OpenBoundarySystem(boundary_zones::Union{BoundaryZone, Nothing}...;
     volume = similar(initial_conditions.density)
 
     cache = (;
-             create_cache_shifting(initial_conditions, shifting_technique, nothing)...,
+             create_cache_shifting(initial_conditions, shifting_technique)...,
              create_cache_open_boundary(boundary_model, fluid_system, initial_conditions,
                                         density_diffusion, calculate_flow_rate,
                                         boundary_zones_)...)
@@ -656,7 +656,8 @@ end
         dist_free_surface = boundary_zone.zone_width - dist_to_transition
 
         # Width of the free-surface region where shifting is disabled.
-        free_surface_region_width = compact_support(system, system, particle)        # Width of the ramp region behind the free-surface region where shifting is ramped
+        free_surface_region_width = compact_support(system, system, particle)
+        # Width of the ramp region behind the free-surface region where shifting is ramped
         # from zero to the unmodified value.
         ramp_width = free_surface_region_width
 
@@ -665,8 +666,8 @@ end
             # free surface. Shifting is disabled there to avoid shifting particles with
             # incomplete support.
             for dim in 1:NDIMS
-                idx = (particle - 1) * NDIMS + dim
-                cache.delta_v[idx] = zero(eltype(system))
+                index = linear_index_vector(dim, particle, NDIMS)
+                cache.delta_v[index] = zero(eltype(system))
             end
         elseif dist_free_surface < free_surface_region_width + ramp_width
             # Between one and two compact supports from the free surface, shifting is
@@ -682,8 +683,8 @@ end
                               kernel_max
             delta_v_ramped = delta_v(system, particle) * shifting_weight
             for dim in 1:NDIMS
-                idx = (particle - 1) * NDIMS + dim
-                cache.delta_v[idx] = delta_v_ramped[dim]
+                index = linear_index_vector(dim, particle, NDIMS)
+                cache.delta_v[index] = delta_v_ramped[dim]
             end
         end
     end
