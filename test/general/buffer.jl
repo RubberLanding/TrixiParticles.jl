@@ -20,6 +20,16 @@
 
     n_particles = nparticles(system)
 
+    @testset "Constructor" begin
+        # Any `Integer` is accepted as buffer size
+        for buffer_size in (Int32(2), UInt(2), big(2))
+            buffer = TrixiParticles.SystemBuffer(5, buffer_size)
+            @test buffer.buffer_size === 2
+            @test length(buffer.active_particle) == 7
+            @test count(buffer.active_particle) == 5
+        end
+    end
+
     @testset "Iterators" begin
         @test TrixiParticles.each_integrated_particle(system) == 1:n_particles
 

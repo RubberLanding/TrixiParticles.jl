@@ -92,14 +92,14 @@ box_logic = (system, particle, v, u,
     end
 end
 
-box_criterion = TrixiParticles.SolutionRefinementCriterion(box_logic)
+box_criterion = SolutionRefinementCriterion(box_logic)
 refinement_criteria = (box_criterion,)
 
-refinement = TrixiParticles.ParticleRefinement(; spacing_ratio=1.05,
-                                               smoothing_length_factor,
-                                               min_spacing, max_spacing,
-                                               reference_density=fluid_density,
-                                               refinement_criteria)
+refinement = ParticleRefinement(; spacing_ratio=1.05,
+                                smoothing_length_factor,
+                                min_spacing, max_spacing,
+                                reference_density=fluid_density,
+                                refinement_criteria)
 
 n_buffer_particles = 5000
 
@@ -133,7 +133,7 @@ saving_callback = SolutionSavingCallback(dt=0.02)
 
 pp_callback = nothing
 
-refinement_callback = TrixiParticles.ParticleRefinementCallback(interval=10)
+refinement_callback = ParticleRefinementCallback(interval=10)
 
 callbacks = CallbackSet(info_callback, saving_callback, pp_callback, UpdateCallback(),
                         refinement_callback)

@@ -5,7 +5,7 @@
                                 viscosity=nothing, density_diffusion=nothing,
                                 pressure_acceleration=nothing,
                                 shifting_technique=nothing,
-                                buffer_size=nothing,
+                                buffer_size=nothing, particle_refinement=nothing,
                                 correction=nothing, source_terms=nothing,
                                 surface_tension=nothing, surface_normal_method=nothing,
                                 reference_particle_spacing=0.0, color_value=1))
@@ -42,7 +42,11 @@ See [Weakly Compressible SPH](@ref wcsph) for more details on the method.
                                 formulation](@ref transport_velocity_formulation) to use
                                 with this system. Default is no shifting.
 - `buffer_size`:                Number of buffer particles.
-                                This is needed when simulating with [`OpenBoundarySystem`](@ref).
+                                This is needed when simulating with [`OpenBoundarySystem`](@ref)
+                                or with particle refinement.
+- `particle_refinement`:        [`ParticleRefinement`](@ref) for adaptive particle refinement
+                                (default: no refinement). This requires a `buffer_size` and the
+                                [`ParticleRefinementCallback`](@ref).
 - `correction`:                 Correction method used for this system. (default: no correction, see [Corrections](@ref corrections))
 - `source_terms`:               Additional source terms for this system. Has to be either `nothing`
                                 (by default), or a function of `(coords, velocity, density, pressure, t)`

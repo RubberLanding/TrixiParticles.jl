@@ -312,6 +312,13 @@ u0: ([...], [...]) *this line is ignored by filter*
 function semidiscretize(semi, tspan; reset_threads=true, restart_with=nothing)
     (; systems) = semi
 
+    if !isnothing(restart_with) &&
+       any(system -> !isnothing(get_refinement(system)), semi.systems)
+        throw(ArgumentError("`restart_with` is not supported with particle refinement " *
+                            "because the particle masses and smoothing lengths cannot be " *
+                            "restored from VTK files"))
+    end
+
     if restart_with isa String
         restart_with = (restart_with,)
     elseif !isnothing(restart_with) && !(restart_with isa NTuple{<:Any, String})

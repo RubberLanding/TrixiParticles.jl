@@ -85,7 +85,7 @@ viscosity = ViscosityAdami(nu=kinematic_viscosity)
 state_equation = nothing
 # ==========================================================================================
 # ==== Refinement
-spatial_criterion = TrixiParticles.SpatialRefinementCriterion()
+spatial_criterion = SpatialRefinementCriterion()
 inlet_logic = (system, particle, v, u,
                semi) -> begin
     x_min = 0.0
@@ -116,8 +116,8 @@ outlet_logic = (system, particle, v, u,
     end
 end
 
-inlet_criterion = TrixiParticles.SolutionRefinementCriterion(inlet_logic)
-outlet_criterion = TrixiParticles.SolutionRefinementCriterion(outlet_logic)
+inlet_criterion = SolutionRefinementCriterion(inlet_logic)
+outlet_criterion = SolutionRefinementCriterion(outlet_logic)
 refinement_criteria = (spatial_criterion, inlet_criterion, outlet_criterion)
 
 n_buffer_refinement_particles = 1000
@@ -125,11 +125,11 @@ n_buffer_particles += n_buffer_refinement_particles
 
 # With `spacing_ratio=1.2`, it takes `log(2) / log(1.2) ≈ 4` neighborhoods
 # to grade from `min_spacing` to `max_spacing`
-refinement = TrixiParticles.ParticleRefinement(; spacing_ratio=1.2,
-                                               min_spacing, max_spacing,
-                                               smoothing_length_factor=smoothing_length_ratio,
-                                               reference_density=fluid_density,
-                                               refinement_criteria)
+refinement = ParticleRefinement(; spacing_ratio=1.2,
+                                min_spacing, max_spacing,
+                                smoothing_length_factor=smoothing_length_ratio,
+                                reference_density=fluid_density,
+                                refinement_criteria)
 
 fluid_system = EntropicallyDampedSPHSystem(pipe.fluid; smoothing_kernel,
                                            smoothing_length, sound_speed, viscosity,
@@ -214,7 +214,7 @@ saving_callback = SolutionSavingCallback(dt=0.02, prefix="")
 
 extra_callback = nothing
 
-refinement_callback = TrixiParticles.ParticleRefinementCallback(interval=10)
+refinement_callback = ParticleRefinementCallback(interval=10)
 
 callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback,
                         refinement_callback)

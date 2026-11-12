@@ -12,6 +12,60 @@ struct ParticleRefinement{ELTYPE, RC, SP, SC}
     n_startup_rounds        :: Int    # Number of refinement rounds in `refinement_startup!`
 end
 
+"""
+    ParticleRefinement(; spacing_ratio, min_spacing, max_spacing, reference_density,
+                       smoothing_length_factor=1.2,
+                       refinement_criteria=SpatialRefinementCriterion(),
+                       splitting_pattern=HexagonalSplitting(),
+                       max_mass_factor=1.05, min_mass_factor=0.5,
+                       shifting_technique=ShiftingHaftu(), n_startup_rounds)
+
+Adaptive particle refinement for fluid systems following
+[Haftu et al. (2022)](@cite Haftu2022), to be passed as `particle_refinement` to an
+[`EntropicallyDampedSPHSystem`](@ref) or a [`WeaklyCompressibleSPHSystem`](@ref).
+
+Every particle has a target spacing between `min_spacing` and `max_spacing`.
+The refinement criteria set the target spacing in some regions, and the target spacing of
+all other particles is graded from there (Alg. 1 and 4 in Haftu et al.).
+Particles that are too heavy for their target spacing are split, and light particles are
+merged (Alg. 2 and 3). The particles are then shifted to a regular distribution, and
+their smoothing lengths are computed from the masses of their neighbors (Eq. 35).
+The mass of a particle with spacing `Δs` is `reference_density * Δs^ndims`.
+
+Refinement is applied by the [`ParticleRefinementCallback`](@ref), which also builds the
+graded particle distribution before the time integration starts.
+The fluid system needs a `buffer_size`, since splitting activates buffer particles.
+
+# Keywords
+- `spacing_ratio`:           Largest ratio between the target spacings of neighboring
+                             particles. The target spacing of a particle in a uniform
+                             region grows by this factor per refinement call, up to
+                             `max_spacing`.
+- `min_spacing`:             Smallest target spacing.
+- `max_spacing`:             Largest target spacing.
+- `reference_density`:       Density that relates the mass of a particle to its spacing.
+- `smoothing_length_factor`: Ratio between smoothing length and particle spacing.
+- `refinement_criteria`:     A refinement criterion or a tuple of refinement criteria that
+                             set the target spacing, see [`SpatialRefinementCriterion`](@ref)
+                             and [`SolutionRefinementCriterion`](@ref).
+- `splitting_pattern`:       Pattern for splitting a particle, see
+                             [`HexagonalSplitting`](@ref) and [`TriangularSplitting`](@ref).
+- `max_mass_factor`:         Particles heavier than `max_mass_factor` times the mass of
+                             their target spacing are split.
+- `min_mass_factor`:         After splitting, particles lighter than `min_mass_factor`
+                             times the mass of their target spacing are merged.
+- `shifting_technique`:      Shifting of the particles after splitting and merging, see
+                             [`ShiftingHaftu`](@ref). With `nothing`, the particles are
+                             not shifted, but their smoothing lengths are still updated.
+- `n_startup_rounds`:        Number of refinement rounds before the time integration
+                             starts. The default is three times the number of spacing
+                             levels between `min_spacing` and `max_spacing`, and at least 3.
+
+!!! warning "Experimental Implementation"
+    This is an experimental feature and may change in any future releases.
+    It is only implemented in 2D. Corrections and `restart_with` are not supported with
+    particle refinement.
+"""
 function ParticleRefinement(; spacing_ratio, min_spacing, max_spacing, reference_density,
                             smoothing_length_factor=1.2,
                             refinement_criteria=SpatialRefinementCriterion(),

@@ -10,7 +10,7 @@ function SystemBuffer(active_size, buffer_size::Integer)
     active_particle = vcat(fill(true, active_size), fill(false, buffer_size))
     eachparticle = collect(eachindex(active_particle))
 
-    return SystemBuffer(active_particle, Ref(active_size), eachparticle, buffer_size)
+    return SystemBuffer(active_particle, Ref(active_size), eachparticle, Int(buffer_size))
 end
 
 allocate_buffer(initial_condition, ::Nothing) = initial_condition

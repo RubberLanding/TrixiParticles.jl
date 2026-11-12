@@ -17,6 +17,24 @@ used in the Julia ecosystem. Notable changes will be documented in this file for
 
 ### Features
 
+- Added experimental adaptive particle refinement following Haftu et al. (2022) for
+  `EntropicallyDampedSPHSystem` and `WeaklyCompressibleSPHSystem` in 2D:
+  - Fluid systems can store one smoothing length per particle. Interactions with fluids,
+    boundaries and structures use the smoothing lengths of both particles of a pair
+    (#1372, #1373, #1374).
+  - The EDAC pressure evolution and pressure acceleration support variable smoothing
+    lengths (#PR3).
+  - Fluid systems with a `SystemBuffer` can grow during the simulation (#PR4 #TODO).
+  - The refinement criteria `SpatialRefinementCriterion` and `SolutionRefinementCriterion`
+    set the target spacing of the particles, which is graded between `min_spacing` and
+    `max_spacing` of `ParticleRefinement` (#PR5 #TODO).
+  - Particles are split with `HexagonalSplitting` or `TriangularSplitting` and merged
+    according to their target spacing (#PR6, #PR7 #TODO).
+  - After splitting and merging, the particles are shifted with `ShiftingHaftu`.
+    The `ParticleShiftingTechnique` supports variable smoothing lengths (#PR8 #TODO).
+  - The `ParticleRefinementCallback` applies refinement during the simulation.
+    Neighborhood searches cover the largest smoothing length a particle can reach (#PR9 #TODO).
+  - Refinement works together with an `OpenBoundarySystem` (#PR10 #TODO).
 - Added the `ThrustCalculator` custom quantity to calculate the hydrodynamic force exerted by
   interacting fluid systems on a `TotalLagrangianSPHSystem` along a given `direction` (#1229).
 - Added `StructureMotionCalculator`, a custom quantity for the `PostprocessCallback`

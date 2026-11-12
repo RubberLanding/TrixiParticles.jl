@@ -136,7 +136,9 @@ makedocs(sitename="TrixiParticles.jl",
                          "Entropically Damped Artificial Compressibility for SPH (Fluid)" => joinpath("systems",
                                                                                                       "entropically_damped_sph.md"),
                          "Implicit Incompressible SPH (Fluid)" => joinpath("systems",
-                                                                           "implicit_incompressible_sph.md")
+                                                                           "implicit_incompressible_sph.md"),
+                         "Particle Refinement" => joinpath("systems",
+                                                           "particle_refinement.md")
                      ],
                      "Discrete Element Method (Solid)" => joinpath("systems", "dem.md"),
                      "Rigid Body Dynamics (Rigid Structure)" => joinpath("systems",

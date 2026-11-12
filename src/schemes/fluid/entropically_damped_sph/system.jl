@@ -7,6 +7,7 @@
                                 alpha=0.5, viscosity=nothing,
                                 acceleration=ntuple(_ -> 0.0, NDIMS), surface_tension=nothing,
                                 surface_normal_method=nothing, buffer_size=nothing,
+                                particle_refinement=nothing,
                                 reference_particle_spacing=0.0, color_value=1,
                                 source_terms=nothing)
 
@@ -41,7 +42,11 @@ See [Entropically Damped Artificial Compressibility for SPH](@ref edac) for more
 - `average_pressure_reduction`: Whether to subtract the average pressure of neighboring particles
                                 from the local pressure (default: `true` when using shifting, `false` otherwise).
 - `buffer_size`:                Number of buffer particles.
-                                This is needed when simulating with [`OpenBoundarySystem`](@ref).
+                                This is needed when simulating with [`OpenBoundarySystem`](@ref)
+                                or with particle refinement.
+- `particle_refinement`:        [`ParticleRefinement`](@ref) for adaptive particle refinement
+                                (default: no refinement). This requires a `buffer_size` and the
+                                [`ParticleRefinementCallback`](@ref).
 - `correction`:                 Correction method used for this system. (default: no correction, see [Corrections](@ref corrections))
 - `source_terms`:               Additional source terms for this system. Has to be either `nothing`
                                 (by default), or a function of `(coords, velocity, density, pressure, t)`
