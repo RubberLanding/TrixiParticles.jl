@@ -256,8 +256,9 @@ end
     return particle_spacing(system, get_refinement(system), particle)
 end
 
-@inline particle_spacing(system, ::Nothing,
-                         particle) = system.initial_condition.particle_spacing
+@inline function particle_spacing(system, ::Nothing, particle)
+    return system.initial_condition.particle_spacing
+end
 
 # Assuming a constant particle spacing one can calculate the number of neighbors within the
 # compact support for an undisturbed particle distribution.

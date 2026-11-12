@@ -332,7 +332,6 @@
         @test fluid_system.buffer.active_particle_count[] == n_active + 6
     end
 
-    # TODO: Integration only. This belongs to the open boundary PR (PR 10).
     @testset verbose=true "No Splitting Into Open Boundary Zones" begin
         fluid_system = edac(density_calculator=ContinuityDensity())
 

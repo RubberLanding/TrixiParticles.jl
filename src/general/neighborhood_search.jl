@@ -58,10 +58,9 @@ function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
 end
 
 @propagate_inbounds function foreach_neighbor(f, system_coords, neighbor_coords,
-                                              neighborhood_search, backend, particle;
-                                              kwargs...)
+                                              neighborhood_search, backend, particle)
     PointNeighbors.foreach_neighbor(f, system_coords, neighbor_coords,
-                                    neighborhood_search, particle; kwargs...)
+                                    neighborhood_search, particle)
 end
 
 @propagate_inbounds function mapreduce_neighbor(f, op, system_coords, neighbor_coords,
@@ -75,12 +74,12 @@ end
 # a kernel, where the arrays are device arrays (like `CuDeviceArray`),
 # which are not `AbstractGPUArray`s.
 @inline function foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search,
-                                  backend::KernelAbstractions.GPU, particle; kwargs...)
+                                  backend::KernelAbstractions.GPU, particle)
     # On GPUs, remove all bounds checks for maximum performance.
     # Note that this is not safe if the neighborhood search was not initialized correctly.
     # For example, this is unsafe when benchmarking `interact!` with the wrong NHS.
     PointNeighbors.foreach_neighbor_unsafe(f, system_coords, neighbor_coords,
-                                           neighborhood_search, particle; kwargs...)
+                                           neighborhood_search, particle)
 end
 
 @inline function mapreduce_neighbor(f, op, system_coords, neighbor_coords,
@@ -126,12 +125,6 @@ end
     (; smoothing_kernel) = system
 
     return compact_support(smoothing_kernel, search_smoothing_length(system))
-end
-
-@inline function compact_support(system::AbstractFluidSystem, neighbor, particle)
-    (; smoothing_kernel) = system
-
-    return compact_support(smoothing_kernel, smoothing_length(system, particle))
 end
 
 # -- Open boundary systems
@@ -982,15 +975,6 @@ end
     foreach_point_neighbor(skip_unsupported_pairs(f, system, neighbor_system, nothing),
                            system, neighbor_system, system_coords, neighbor_coords, semi;
                            kwargs...)
-end
-
-@propagate_inbounds function foreach_symmetric_neighbor(f, system, neighbor_system,
-                                                        system_coords, neighbor_coords,
-                                                        neighborhood_search, backend,
-                                                        particle; kwargs...)
-    foreach_neighbor(skip_unsupported_pairs(f, system, neighbor_system, nothing),
-                     system_coords, neighbor_coords, neighborhood_search, backend,
-                     particle; kwargs...)
 end
 
 @propagate_inbounds function mapreduce_symmetric_neighbor(f, op, system, neighbor_system,

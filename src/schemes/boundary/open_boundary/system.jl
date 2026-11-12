@@ -299,6 +299,8 @@ end
 
 @inline function set_particle_mass!(system::OpenBoundarySystem, particle, mass)
     system.mass[particle] = mass
+
+    return system
 end
 
 function calculate_dt(v_ode, u_ode, cfl_number, system::OpenBoundarySystem, semi)
@@ -527,6 +529,10 @@ end
         return system
     end
 
+    # In a bidirectional zone, the particle can carry the smoothing length
+    # of a refined fluid particle that left the fluid domain
+    set_particle_smoothing_length!(system, particle, initial_smoothing_length(system))
+
     impose_rest_density!(v, system, particle, system.boundary_model)
 
     impose_rest_pressure!(v, system, particle, system.boundary_model)
@@ -541,9 +547,6 @@ end
     # Activate particle in boundary zone
     transfer_particle!(system, fluid_system, particle, particle_new,
                        v, u, v_fluid, u_fluid, periodic_box)
-
-    # # Ensure the boundary particle retains the uniform boundary mass, not the refined fluid mass
-    # set_particle_mass!(system, particle_new, first(system.initial_condition.mass))
 
     # Deactivate particle in interior domain
     deactivate_particle!(fluid_system, particle, v_fluid, u_fluid)
@@ -643,7 +646,6 @@ end
 # The face opposite to this transition face is a free surface.
 @inline function modify_shifting_at_free_surfaces!(system::OpenBoundarySystem, u, semi)
     (; fluid_system, cache) = system
-    NDIMS = ndims(system)
 
     @threaded semi for particle in each_integrated_particle(system)
         boundary_zone = current_boundary_zone(system, particle)
@@ -665,8 +667,8 @@ end
             # The free-surface region is the layer within one compact support of the
             # free surface. Shifting is disabled there to avoid shifting particles with
             # incomplete support.
-            for dim in 1:NDIMS
-                index = linear_index_vector(dim, particle, NDIMS)
+            for dim in 1:ndims(system)
+                index = linear_index_vector(dim, particle, ndims(system))
                 cache.delta_v[index] = zero(eltype(system))
             end
         elseif dist_free_surface < free_surface_region_width + ramp_width
@@ -682,8 +684,8 @@ end
             shifting_weight = smoothing_kernel(system, dist_from_ramp_end, particle) /
                               kernel_max
             delta_v_ramped = delta_v(system, particle) * shifting_weight
-            for dim in 1:NDIMS
-                index = linear_index_vector(dim, particle, NDIMS)
+            for dim in 1:ndims(system)
+                index = linear_index_vector(dim, particle, ndims(system))
                 cache.delta_v[index] = delta_v_ramped[dim]
             end
         end
@@ -858,6 +860,7 @@ function check_boundary_zone_widths(boundary_zones, fluid_system)
     support = compact_support(system_smoothing_kernel(fluid_system),
                               initial_smoothing_length(fluid_system))
     minimum_width = 2 * support
+
     for (i, zone) in enumerate(boundary_zones)
         if zone.zone_width < minimum_width
             throw(ArgumentError("boundary zone $i has width $(zone.zone_width), " *

@@ -338,8 +338,6 @@
         end
     end
 
-    # TODO: Integration only. On the PR branches, resizing throws for fluids with an
-    # open boundary (until PR 10).
     @testset verbose=true "Shifting and Open Boundary" begin
         # With shifting, the zone must be at least two compact supports wide
         fluid_system = edac(tank.fluid; particle_refinement=refinement, buffer_size=4,

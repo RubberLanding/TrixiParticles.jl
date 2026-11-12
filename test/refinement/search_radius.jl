@@ -170,21 +170,32 @@
                                      open_boundary_layers=5, density=reference_density,
                                      particle_spacing=open_boundary_spacing)
 
+        function wcsph_system(fluid)
+            return WeaklyCompressibleSPHSystem(fluid; smoothing_kernel,
+                                               smoothing_length=1.2 * max_spacing,
+                                               state_equation,
+                                               density_calculator=ContinuityDensity(),
+                                               particle_refinement=refinement,
+                                               buffer_size=4)
+        end
+
+        function edac_system(fluid)
+            return EntropicallyDampedSPHSystem(fluid; smoothing_kernel,
+                                               smoothing_length=1.2 * max_spacing,
+                                               sound_speed,
+                                               density_calculator=ContinuityDensity(),
+                                               particle_refinement=refinement,
+                                               buffer_size=4)
+        end
+
         # One fluid particle next to the open boundary with the smoothing length
         # `1.2 * max_spacing = 0.12`. The closest open boundary particles are at
         # (-0.025, 0.225) and (-0.025, 0.275).
-        # TODO: Use EDAC when the open boundary pressure evolution works with refinement
-        # (PR 10). It currently throws a `MethodError` in `pressure_evolution!`.
-        function create_open_boundary_systems(position)
+        function create_open_boundary_systems(position; create_fluid_system=wcsph_system)
             fluid = InitialCondition(; coordinates=reshape(position, 2, 1),
                                      velocity=[1.0; 0.0;;], density=reference_density,
                                      particle_spacing=max_spacing)
-            fluid_system = WeaklyCompressibleSPHSystem(fluid; smoothing_kernel,
-                                                       smoothing_length=1.2 * max_spacing,
-                                                       state_equation,
-                                                       density_calculator=ContinuityDensity(),
-                                                       particle_refinement=refinement,
-                                                       buffer_size=4)
+            fluid_system = create_fluid_system(fluid)
             open_boundary = OpenBoundarySystem(boundary_zone; fluid_system,
                                                buffer_size=4,
                                                boundary_model=BoundaryModelDynamicalPressureZhang())
@@ -221,9 +232,9 @@
 
         # The open boundary uses the average smoothing length of a pair. A pair can be
         # inside of the support of the fluid particle, but outside of the average support.
-        function open_boundary_dv(position)
-            v_ode, u_ode,
-            semi = semidiscretize_open_boundary(create_open_boundary_systems(position)...)
+        function open_boundary_dv(position, create_fluid_system)
+            systems = create_open_boundary_systems(position; create_fluid_system)
+            v_ode, u_ode, semi = semidiscretize_open_boundary(systems...)
             fluid_system, open_boundary = semi.systems
 
             dv = zeros(size(TrixiParticles.wrap_v(v_ode, open_boundary, semi)))
@@ -236,14 +247,22 @@
             return dv
         end
 
-        @testset "Pair Outside of the Average Support" begin
+        # EDAC also computes the pressure evolution of the open boundary particles
+        @testset "Pair Outside of the Average Support With $name" for (name,
+                                                                       create_fluid_system) in
+                                                                      (("WCSPH",
+                                                                        wcsph_system),
+                                                                       ("EDAC",
+                                                                        edac_system))
             # The distance to the closest open boundary particles is about 0.2016.
             # This is inside of the fluid support `2 * 0.12 = 0.24`, but outside of the
             # average support `2 * (0.06 + 0.12) / 2 = 0.18`.
-            @test iszero(open_boundary_dv([0.175, 0.25]))
+            @test iszero(open_boundary_dv([0.175, 0.25], create_fluid_system))
 
             # Inside of the average support, the fluid particle contributes
-            @test !iszero(open_boundary_dv([0.125, 0.25]))
+            dv = open_boundary_dv([0.125, 0.25], create_fluid_system)
+            @test !iszero(dv)
+            @test all(isfinite, dv)
         end
     end
 end

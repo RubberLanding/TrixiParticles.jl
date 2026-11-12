@@ -116,7 +116,6 @@ end
 
 # Do not split a particle if one of the new particles would be placed in an open boundary
 # zone, where it would immediately be converted to an open boundary particle.
-# TODO: This belongs to the open boundary PR (PR 10) of the refinement PR series.
 function skip_splitting_near_boundary!(system, neighbor_system::OpenBoundarySystem,
                                        u_ode, semi)
     # Only the fluid system of the open boundary converts particles

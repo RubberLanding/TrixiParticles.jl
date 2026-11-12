@@ -47,7 +47,6 @@ function resize_systems!(v_ode, u_ode, semi, n_particles)
         resized[i] && resize_system!(systems[i], n_particles[i])
     end
 
-    # TODO: This belongs to the open boundary PR (PR 10) of the refinement PR series.
     resize_open_boundaries!(semi, resized)
 
     # The particles of each system are stored in a contiguous range with the particle
