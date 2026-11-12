@@ -104,6 +104,63 @@
                                                                                                    parallelization_backend=SerialBackend())
     end
 
+    @testset verbose=true "Second Fluid" begin
+        # The second fluid is next to the tank and has the smoothing length
+        # `1.2 * 0.05 = 0.06`, which is smaller than the one of the coarsest refined
+        # fluid particles.
+        second_spacing = 0.05
+        second_fluid = RectangularShape(second_spacing, (4, 4), (1.5, 0.1);
+                                        density=reference_density)
+
+        function second_fluid_system(; kwargs...)
+            return WeaklyCompressibleSPHSystem(second_fluid; smoothing_kernel,
+                                               smoothing_length=1.2 * second_spacing,
+                                               state_equation,
+                                               density_calculator=ContinuityDensity(),
+                                               kwargs...)
+        end
+
+        second_setups = [
+            ("Without Refinement", () -> second_fluid_system()),
+            # Both fluids have variable smoothing lengths, which must not call
+            # `compact_support` recursively.
+            ("With Refinement",
+             () -> second_fluid_system(particle_refinement=refinement, buffer_size=4))
+        ]
+
+        @testset verbose=true "$name" for (name, create_second_system) in second_setups
+            fluid_system, boundary_system = create_systems(max_spacing)
+
+            # The search of the second fluid would be too small without the refined
+            # neighbor, which would emit a warning.
+            semi = @test_logs Semidiscretization(fluid_system, boundary_system,
+                                                 create_second_system();
+                                                 neighborhood_search=grid_nhs,
+                                                 parallelization_backend=SerialBackend())
+            fluid_system, _, second_system = semi.systems
+
+            # Pairs of both fluids interact within the larger compact support
+            for (system, neighbor) in ((second_system, fluid_system),
+                 (fluid_system, second_system))
+                nhs = TrixiParticles.get_neighborhood_search(system, neighbor, semi)
+                @test PointNeighbors.search_radius(nhs) ≈ 2 * h_max
+            end
+        end
+
+        @testset "Self-Interaction Without Refinement" begin
+            fluid_system, boundary_system = create_systems(max_spacing)
+            semi = Semidiscretization(fluid_system, boundary_system, second_fluid_system();
+                                      neighborhood_search=grid_nhs,
+                                      neighborhood_search_handler=PairsNHSHandler,
+                                      parallelization_backend=SerialBackend())
+            second_system = semi.systems[3]
+
+            # The searches between systems without refinement are unchanged
+            nhs = TrixiParticles.get_neighborhood_search(second_system, second_system, semi)
+            @test PointNeighbors.search_radius(nhs) ≈ 2 * 1.2 * second_spacing
+        end
+    end
+
     @testset verbose=true "Open Boundary" begin
         # The open boundary particles are finer than the coarsest fluid particles.
         # They start with the smoothing length `1.2 * 0.05 = 0.06`.
