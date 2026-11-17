@@ -179,6 +179,8 @@ end
 # `ϕ_a' = ϕ_a + (∇ϕ)_a ⋅ δr_a` with `(∇ϕ)_a = ∑_b V_b (ϕ_b - ϕ_a) ∇W_ab`, where `δr_a`
 # is the total shift of all iterations. As in the code of Haftu et al., the gradients are
 # computed at the shifted positions and all systems are included.
+# Unlike in their code, free-slip walls do not contribute to the velocity gradient
+# (see `correction_velocity`).
 function correct_properties!(system, v, u, v_ode, u_ode, semi)
     (; total_shift, velocity_correction, pressure_correction,
      density_correction) = system.cache
@@ -211,7 +213,7 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
             rho_a = @inbounds current_density(v, system, particle)
             rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
             v_a = @inbounds current_velocity(v, system, particle)
-            v_b = @inbounds current_velocity(v_neighbor, neighbor_system, neighbor)
+            v_b = @inbounds correction_velocity(v_neighbor, neighbor_system, neighbor, v_a)
             p_a = @inbounds current_pressure(v, system, particle)
             p_b = @inbounds current_pressure(v_neighbor, neighbor_system, neighbor)
 
@@ -237,6 +239,45 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
     end
 
     return system
+end
+
+# The neighbor velocity `v_b` in the velocity correction of Eq. 37.
+#
+# Free-slip walls (wall boundary models without viscosity) return `v_a`, so that they do not
+# contribute to the velocity correction. At a free-slip wall, the tangential velocity
+# of the fluid does not change towards the wall. The wall particles, however, carry
+# the wall velocity (zero for a resting wall). With the wall velocity, `v_b - v_a` would
+# create a velocity gradient of about `|v_a| / h` normal to the wall, which does not exist
+# in the flow. A particle shifted towards the wall would then be slowed down by this
+# gradient, as if the wall were a no-slip wall. In the vortex street, the shift moves
+# the first fluid rows slightly towards the walls in every refinement call, which slowed
+# them down by more than 10 %.
+#
+# No-slip walls (with viscosity) use the wall velocity, because the velocity gradient
+# towards these walls is physical. All other systems use their particle velocity.
+# The code of Haftu et al. uses the wall velocity for all walls,
+# but their test cases have no free-slip walls.
+@propagate_inbounds function correction_velocity(v_neighbor, neighbor_system, neighbor,
+                                                 v_a)
+    return current_velocity(v_neighbor, neighbor_system, neighbor)
+end
+
+@propagate_inbounds function correction_velocity(v_neighbor,
+                                                 neighbor_system::WallBoundarySystem,
+                                                 neighbor, v_a)
+    return correction_velocity(v_neighbor, neighbor_system,
+                               neighbor_system.boundary_model.viscosity, neighbor, v_a)
+end
+
+# Free-slip wall
+@inline function correction_velocity(v_neighbor, neighbor_system, ::Nothing, neighbor, v_a)
+    return v_a
+end
+
+# No-slip wall
+@propagate_inbounds function correction_velocity(v_neighbor, neighbor_system, viscosity,
+                                                 neighbor, v_a)
+    return current_velocity(v_neighbor, neighbor_system, neighbor)
 end
 
 @inline function correct_density!(v, system, ::ContinuityDensity, particle, correction)

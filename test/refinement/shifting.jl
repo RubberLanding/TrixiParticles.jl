@@ -39,7 +39,8 @@
                                            particle_refinement, buffer_size, kwargs...)
     end
 
-    function semidiscretize_systems(fluid_system; compute_rhs=true)
+    function semidiscretize_systems(fluid_system; compute_rhs=true,
+                                    boundary_model=boundary_model)
         semi = Semidiscretization(fluid_system,
                                   WallBoundarySystem(tank.boundary, boundary_model);
                                   neighborhood_search,
@@ -181,6 +182,47 @@
                 # The summation density is computed from the shifted positions
                 # in the next evaluation of the right-hand side
                 @test rho_new == rho_old
+            end
+        end
+
+        # A particle next to the bottom wall is moved towards the wall, so that shifting
+        # moves it back. The fluid moves parallel to the resting wall.
+        @testset "Velocity Correction at $wall_type Walls" for wall_type in ("Free-Slip",
+                                                                            "No-Slip")
+            # The wall viscosity requires a fluid viscosity
+            fluid_viscosity = ViscosityAdami(nu=1e-3)
+            wall_viscosity = wall_type == "No-Slip" ? fluid_viscosity : nothing
+            wall_model = BoundaryModelDummyParticles(tank.boundary.density,
+                                                     tank.boundary.mass,
+                                                     AdamiPressureExtrapolation(),
+                                                     smoothing_kernel, smoothing_length;
+                                                     state_equation,
+                                                     viscosity=wall_viscosity)
+            near_wall = nearest_particle(tank.fluid.coordinates, [0.475, 0.025])
+            fluid = deepcopy(tank.fluid)
+            fluid.coordinates[:, near_wall] .+= [0.0, -0.2 * particle_spacing]
+            fluid.velocity .= [1.0, 0.0]
+
+            v_ode, u_ode,
+            semi = semidiscretize_systems(create_fluid(fluid; density_calculator,
+                                                       viscosity=fluid_viscosity),
+                                          boundary_model=wall_model)
+            system = semi.systems[1]
+            v = TrixiParticles.wrap_v(v_ode, system, semi)
+
+            TrixiParticles.shift_particles!(semi, v_ode, u_ode)
+
+            shift = reshape(system.cache.total_shift, 2, :)[:, near_wall]
+            @test shift[2] > 0.01 * particle_spacing
+
+            v_new = TrixiParticles.current_velocity(v, system, near_wall)
+            if wall_type == "Free-Slip"
+                # The velocity does not change in the wall-normal direction
+                # at a free-slip wall, so the correction must not change it
+                @test isapprox(v_new, [1.0, 0.0], atol=1e-12)
+            else
+                # The velocity increases away from a no-slip wall
+                @test v_new[1] > 1.0 + 0.01
             end
         end
     end
