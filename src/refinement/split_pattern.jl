@@ -1,5 +1,8 @@
 abstract type AbstractSplittingPattern end
 
+# Patterns without values are not converted (see `convert_refinement_eltype`)
+convert_splitting_eltype(pattern, ELTYPE) = pattern
+
 """
     HexagonalSplitting(; epsilon=0.4, alpha=0.9)
 
@@ -19,8 +22,16 @@ struct HexagonalSplitting{ELTYPE} <: AbstractSplittingPattern
     alpha   :: ELTYPE
 
     function HexagonalSplitting(; epsilon=0.4, alpha=0.9)
+        epsilon, alpha = promote(epsilon, alpha)
+
         return new{typeof(epsilon)}(epsilon, alpha)
     end
+end
+
+# The fluid system converts the values to its element type (see `convert_refinement_eltype`)
+function convert_splitting_eltype(pattern::HexagonalSplitting, ELTYPE)
+    return HexagonalSplitting(epsilon=convert(ELTYPE, pattern.epsilon),
+                              alpha=convert(ELTYPE, pattern.alpha))
 end
 
 # The directions of the new particles relative to the particle in the center
@@ -54,8 +65,15 @@ struct TriangularSplitting{ELTYPE} <: AbstractSplittingPattern
     alpha   :: ELTYPE
 
     function TriangularSplitting(; epsilon=0.4, alpha=0.92)
+        epsilon, alpha = promote(epsilon, alpha)
+
         return new{typeof(epsilon)}(epsilon, alpha)
     end
+end
+
+function convert_splitting_eltype(pattern::TriangularSplitting, ELTYPE)
+    return TriangularSplitting(epsilon=convert(ELTYPE, pattern.epsilon),
+                               alpha=convert(ELTYPE, pattern.alpha))
 end
 
 @inline function split_directions(pattern::TriangularSplitting, ::Val{2})

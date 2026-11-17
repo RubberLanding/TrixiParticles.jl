@@ -29,8 +29,9 @@ function interact!(dv, v_particle_system, u_particle_system,
         # Note that `return` only exits the closure, i.e., skips the current neighbor.
         skip_zero_distance(particle_system) && distance < almostzero(h) && return
 
-        grad_kernel = symmetric_kernel_grad(particle_system, neighbor_system,
-                                            pos_diff, distance, particle, neighbor)
+        grad_kernel = @inbounds symmetric_kernel_grad(particle_system, neighbor_system,
+                                                      pos_diff, distance, particle,
+                                                      neighbor)
 
         m_b = hydrodynamic_mass(neighbor_system, neighbor)
 

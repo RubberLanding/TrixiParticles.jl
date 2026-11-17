@@ -56,8 +56,8 @@
 
     solution_criterion(target) = TrixiParticles.SolutionRefinementCriterion((system,
                                                                              particle,
-                                                                             v, u,
-                                                                             semi) -> target)
+                                                                             v,
+                                                                             u) -> target)
 
     @testset "Default Criterion" begin
         refinement = TrixiParticles.ParticleRefinement(; spacing_ratio=1.05,
@@ -149,12 +149,12 @@
         # The criterion for the particles with `x < 0.5` requests `max_spacing`,
         # so it is only active for the particles with `x >= 0.5`
         region_criterion = TrixiParticles.SolutionRefinementCriterion((system, particle,
-                                                                       v, u,
-                                                                       semi) -> u[1,
-                                                                                  particle] <
-                                                                                0.5 ?
-                                                                                particle_spacing :
-                                                                                0.03)
+                                                                       v,
+                                                                       u) -> u[1,
+                                                                               particle] <
+                                                                             0.5 ?
+                                                                             particle_spacing :
+                                                                             0.03)
 
         fluid_system, semi, v_ode,
         u_ode = setup((solution_criterion(0.08), region_criterion))

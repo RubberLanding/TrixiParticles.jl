@@ -297,7 +297,8 @@ end
     return v
 end
 
-@inline function set_particle_mass!(system::OpenBoundarySystem, particle, mass)
+@propagate_inbounds function set_particle_mass!(system::OpenBoundarySystem, particle,
+                                                mass)
     system.mass[particle] = mass
 
     return system
@@ -733,7 +734,7 @@ function interpolate_velocity!(system::OpenBoundarySystem, boundary_zone,
             volume_b = m_b / rho_b
 
             # Fetch the neighbor's variable smoothing length and calculate the symmetric average
-            h_b = smoothing_length(neighbor_system, neighbor)
+            h_b = @inbounds smoothing_length(neighbor_system, neighbor)
             h_ab = (h_a + h_b) / 2
             W_ab = kernel(smoothing_kernel, distance, h_ab)
             @inbounds shepard_coefficient[point] += volume_b * W_ab

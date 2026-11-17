@@ -76,9 +76,12 @@ function resize_systems!(v_ode, u_ode, semi, n_particles)
 
         v = wrap_v(v_ode, system, semi)
         u = wrap_u(u_ode, system, semi)
+        new_particles = (n_particles_old[system_index] + 1):nparticles(system)
 
-        for particle in (n_particles_old[system_index] + 1):nparticles(system)
-            initialize_inactive_particle!(system, v, u, particle)
+        # This is a kernel on GPUs, where `v`, `u` and the system data cannot be
+        # accessed from the CPU. All new particles are in bounds after resizing.
+        @threaded semi for particle in new_particles
+            @inbounds initialize_inactive_particle!(system, v, u, particle)
         end
     end
 
@@ -165,7 +168,7 @@ function resize_open_boundaries!(semi, resized)
     return semi
 end
 
-function initialize_inactive_particle!(system, v, u, particle)
+@propagate_inbounds function initialize_inactive_particle!(system, v, u, particle)
     (; reference_density) = get_refinement(system)
 
     deactivate_particle!(system, particle, v, u)
@@ -179,7 +182,7 @@ end
 # particles. Note that a TLSPH self-interaction is never resized.
 function resize_neighborhood_searches!(handler::PairsNHSHandler, semi, resized)
     (; neighborhood_searches) = handler
-    (; systems) = semi
+    (; systems, parallelization_backend) = semi
 
     for neighbor_index in eachindex(systems)
         resized[neighbor_index] || continue
@@ -188,9 +191,9 @@ function resize_neighborhood_searches!(handler::PairsNHSHandler, semi, resized)
         for system_index in axes(neighborhood_searches, 1)
             nhs = neighborhood_searches[system_index, neighbor_index]
             neighborhood_searches[system_index,
-                                  neighbor_index] = copy_neighborhood_search(nhs,
-                                                                             PointNeighbors.search_radius(nhs),
-                                                                             n_points)
+                                  neighbor_index] = copy_resized_neighborhood_search(nhs,
+                                                                                     n_points,
+                                                                                     parallelization_backend)
         end
     end
 
@@ -199,7 +202,7 @@ end
 
 function resize_neighborhood_searches!(handler::SharedNHSHandler, semi, resized)
     (; neighborhood_searches) = handler
-    (; systems) = semi
+    (; systems, parallelization_backend) = semi
 
     for neighbor_index in eachindex(systems)
         resized[neighbor_index] || continue
@@ -207,14 +210,28 @@ function resize_neighborhood_searches!(handler::SharedNHSHandler, semi, resized)
         searches = neighborhood_searches[neighbor_index]
 
         for radius_index in eachindex(searches)
-            nhs = searches[radius_index]
-            searches[radius_index] = copy_neighborhood_search(nhs,
-                                                              PointNeighbors.search_radius(nhs),
-                                                              n_points)
+            searches[radius_index] = copy_resized_neighborhood_search(searches[radius_index],
+                                                                      n_points,
+                                                                      parallelization_backend)
         end
     end
 
     return handler
+end
+
+function copy_resized_neighborhood_search(nhs, n_points, parallelization_backend)
+    nhs_new = copy_neighborhood_search(nhs, PointNeighbors.search_radius(nhs), n_points)
+
+    # `copy_neighborhood_search` creates the neighborhood search on the CPU,
+    # so move it to the GPU as in `semidiscretize`
+    return adapt_resized_neighborhood_search(nhs_new, parallelization_backend)
+end
+
+adapt_resized_neighborhood_search(nhs, parallelization_backend) = nhs
+
+function adapt_resized_neighborhood_search(nhs,
+                                           parallelization_backend::KernelAbstractions.GPU)
+    return Adapt.adapt(parallelization_backend, nhs)
 end
 
 # Initialize the recreated neighborhood searches with the current coordinates

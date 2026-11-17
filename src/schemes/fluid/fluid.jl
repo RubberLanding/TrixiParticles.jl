@@ -25,8 +25,8 @@ end
 # of newly activated particles in a callback.
 # DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
 # outside of callbacks.
-@inline function set_particle_velocity!(v, system::AbstractFluidSystem, particle,
-                                        particle_velocity)
+@propagate_inbounds function set_particle_velocity!(v, system::AbstractFluidSystem,
+                                                    particle, particle_velocity)
     velocity = current_velocity(v, system) # Needed e.g. when using `ContinuityDensity`
 
     for dim in 1:ndims(system)
@@ -41,7 +41,8 @@ end
 # of newly activated particles in a callback.
 # DO NOT use outside a callback. OrdinaryDiffEq does not allow changing `v` and `u`
 # outside of callbacks.
-@inline function set_particle_position!(u, system::AbstractFluidSystem, particle, position)
+@propagate_inbounds function set_particle_position!(u, system::AbstractFluidSystem,
+                                                    particle, position)
     for dim in 1:ndims(system)
         u[dim, particle] = position[dim]
     end
@@ -49,7 +50,7 @@ end
     return u
 end
 
-@inline function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
+@propagate_inbounds function set_particle_mass!(system::AbstractFluidSystem, particle, mass)
     system.mass[particle] = mass
 
     return system
@@ -90,23 +91,25 @@ end
 end
 
 # With refinement, the particle spacing follows from the mass of the particle
-@inline function particle_spacing(system, refinement, particle)
+@propagate_inbounds function particle_spacing(system, refinement, particle)
     (; reference_density) = refinement
+    volume = hydrodynamic_mass(system, particle) / reference_density
 
-    return (hydrodynamic_mass(system, particle) / reference_density)^(1 / ndims(system))
+    return root_ndims(volume, Val(ndims(system)))
 end
 
 # Kernel gradient shared by both particles of a pair
-@inline function symmetric_kernel_grad(particle_system, neighbor_system,
-                                       pos_diff, distance, particle, neighbor)
+@propagate_inbounds function symmetric_kernel_grad(particle_system, neighbor_system,
+                                                   pos_diff, distance, particle, neighbor)
     return symmetric_kernel_grad(Val(has_variable_smoothing_length(particle_system,
                                                                    neighbor_system)),
                                  particle_system, neighbor_system,
                                  pos_diff, distance, particle, neighbor)
 end
 
-@inline function symmetric_kernel_grad(::Val{false}, particle_system, neighbor_system,
-                                       pos_diff, distance, particle, neighbor)
+@propagate_inbounds function symmetric_kernel_grad(::Val{false}, particle_system,
+                                                   neighbor_system, pos_diff, distance,
+                                                   particle, neighbor)
     # Now that we know that `distance` is not zero, we can safely call the unsafe
     # version of the kernel gradient to avoid redundant zero checks.
     return smoothing_kernel_grad_unsafe(particle_system, pos_diff, distance, particle)
@@ -114,8 +117,9 @@ end
 
 # With variable smoothing lengths, the average of the gradients of both particles keeps
 # the pair interaction antisymmetric.
-@inline function symmetric_kernel_grad(::Val{true}, particle_system, neighbor_system,
-                                       pos_diff, distance, particle, neighbor)
+@propagate_inbounds function symmetric_kernel_grad(::Val{true}, particle_system,
+                                                   neighbor_system, pos_diff, distance,
+                                                   particle, neighbor)
     grad_kernel_a,
     grad_kernel_b = pair_kernel_grads(particle_system, neighbor_system,
                                       pos_diff, distance, particle, neighbor)
@@ -126,8 +130,8 @@ end
 # The kernel gradients with the smoothing lengths of both particles of a pair.
 # Pairs up to the larger of both compact supports can reach this function, so we need
 # the safe version, which is zero outside of the compact support.
-@inline function pair_kernel_grads(particle_system, neighbor_system,
-                                   pos_diff, distance, particle, neighbor)
+@propagate_inbounds function pair_kernel_grads(particle_system, neighbor_system,
+                                               pos_diff, distance, particle, neighbor)
     kernel = system_smoothing_kernel(particle_system)
     h_a, h_b = pair_smoothing_lengths(particle_system, neighbor_system, particle, neighbor)
 

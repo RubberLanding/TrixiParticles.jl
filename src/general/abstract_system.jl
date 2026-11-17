@@ -214,21 +214,25 @@ end
 
 @inline smoothing_length(system) = system.smoothing_length
 
-@inline function smoothing_length(system, particle)
+@propagate_inbounds function smoothing_length(system, particle)
     return smoothing_length(system, Val(has_variable_smoothing_length(system)), particle)
 end
 
 @inline smoothing_length(system, ::Val{false}, particle) = smoothing_length(system)
-@inline smoothing_length(system, ::Val{true}, particle) = smoothing_length(system)[particle]
+@propagate_inbounds function smoothing_length(system, ::Val{true}, particle)
+    return smoothing_length(system)[particle]
+end
 
-@inline function set_particle_smoothing_length!(system, particle, smoothing_length)
+@propagate_inbounds function set_particle_smoothing_length!(system, particle,
+                                                            smoothing_length)
     set_particle_smoothing_length!(system, Val(has_variable_smoothing_length(system)),
                                    particle, smoothing_length)
 end
 
 @inline set_particle_smoothing_length!(system, ::Val{false}, particle, h) = system
 
-@inline function set_particle_smoothing_length!(system, ::Val{true}, particle, h)
+@propagate_inbounds function set_particle_smoothing_length!(system, ::Val{true}, particle,
+                                                            h)
     smoothing_length(system)[particle] = h
 
     return system
@@ -236,14 +240,15 @@ end
 
 # Particle masses are only allowed to change when using refinement.
 # Otherwise, they are constant and don't need to be restored when restarting a simulation.
-@inline function set_variable_particle_mass!(system, particle, mass)
+@propagate_inbounds function set_variable_particle_mass!(system, particle, mass)
     set_variable_particle_mass!(system, Val(has_variable_smoothing_length(system)),
                                 particle, mass)
 end
 
 @inline set_variable_particle_mass!(system, ::Val{false}, particle, mass) = system
 
-@inline function set_variable_particle_mass!(system, ::Val{true}, particle, mass)
+@propagate_inbounds function set_variable_particle_mass!(system, ::Val{true}, particle,
+                                                         mass)
     set_particle_mass!(system, particle, mass)
 
     return system
@@ -252,7 +257,7 @@ end
 @inline system_smoothing_kernel(system) = system.smoothing_kernel
 @inline system_correction(system) = nothing
 
-@inline function particle_spacing(system, particle)
+@propagate_inbounds function particle_spacing(system, particle)
     return particle_spacing(system, get_refinement(system), particle)
 end
 

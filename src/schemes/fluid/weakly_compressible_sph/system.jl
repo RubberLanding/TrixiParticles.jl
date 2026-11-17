@@ -118,6 +118,8 @@ function WeaklyCompressibleSPHSystem(initial_condition; smoothing_kernel,
     ELTYPE = eltype(initial_condition)
     n_particles = nparticles(initial_condition)
 
+    particle_refinement = convert_refinement_eltype(particle_refinement, ELTYPE)
+
     mass = copy(initial_condition.mass)
     pressure = similar(initial_condition.pressure)
 

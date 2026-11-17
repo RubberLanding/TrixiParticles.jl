@@ -27,8 +27,9 @@ function interact!(dv, v_particle_system, u_particle_system,
         # With variable smoothing lengths, the pair is weighted with the average
         # smoothing length. The neighborhood search uses the largest compact support,
         # so the pair can be outside of the compact support of the average.
-        h_ab = open_boundary_pair_smoothing_length(particle_system, neighbor_system,
-                                                   particle, neighbor)
+        h_ab = @inbounds open_boundary_pair_smoothing_length(particle_system,
+                                                             neighbor_system,
+                                                             particle, neighbor)
         kernel_ = system_smoothing_kernel(particle_system)
         distance >= compact_support(kernel_, h_ab) && return
 
@@ -113,8 +114,9 @@ function interact!(dv, v_particle_system, u_particle_system,
     return dv
 end
 
-@inline function open_boundary_pair_smoothing_length(particle_system, neighbor_system,
-                                                     particle, neighbor)
+@propagate_inbounds function open_boundary_pair_smoothing_length(particle_system,
+                                                                 neighbor_system,
+                                                                 particle, neighbor)
     return open_boundary_pair_smoothing_length(Val(has_variable_smoothing_length(particle_system)),
                                                particle_system, neighbor_system,
                                                particle, neighbor)
@@ -125,8 +127,10 @@ end
     return initial_smoothing_length(particle_system)
 end
 
-@inline function open_boundary_pair_smoothing_length(::Val{true}, particle_system,
-                                                     neighbor_system, particle, neighbor)
+@propagate_inbounds function open_boundary_pair_smoothing_length(::Val{true},
+                                                                 particle_system,
+                                                                 neighbor_system,
+                                                                 particle, neighbor)
     h_a = smoothing_length(particle_system, particle)
     h_b = pair_smoothing_length(neighbor_system, neighbor, h_a)
 

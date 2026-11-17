@@ -115,9 +115,10 @@
         target_spacing .= particle_spacing
         target_spacing[center] = min_spacing
 
+        nhs = TrixiParticles.get_neighborhood_search(fluid_system, semi)
         _, _, spacing_avg,
-        n = TrixiParticles.neighborhood_spacing(fluid_system, tank.fluid.coordinates,
-                                                semi, center)
+        n = TrixiParticles.neighborhood_spacing(fluid_system, tank.fluid.coordinates, nhs,
+                                                semi.parallelization_backend, center)
 
         TrixiParticles.update_target_spacing!(fluid_system, v_ode, u_ode, semi)
 

@@ -123,6 +123,8 @@ function EntropicallyDampedSPHSystem(initial_condition; smoothing_kernel, smooth
         throw(ArgumentError("smoothing kernel dimensionality must be $NDIMS for a $(NDIMS)D problem"))
     end
 
+    particle_refinement = convert_refinement_eltype(particle_refinement, ELTYPE)
+
     acceleration_ = SVector(acceleration...)
     if length(acceleration_) != NDIMS
         throw(ArgumentError("`acceleration` must be of length $NDIMS for a $(NDIMS)D problem"))
@@ -413,20 +415,22 @@ function update_beta!(system, refinement, v, u, v_ode, u_ode, semi)
                                                                                neighbor,
                                                                                pos_diff,
                                                                                distance
-                m_b = hydrodynamic_mass(neighbor_system, neighbor)
-                h_a = smoothing_length(system, particle)
+                # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
+                # in bounds of the respective system
+                m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
+                h_a = @inbounds smoothing_length(system, particle)
 
-                beta[particle] += m_b * distance *
-                                  kernel_deriv(smoothing_kernel, distance, h_a)
+                @inbounds beta[particle] += m_b * distance *
+                                            kernel_deriv(smoothing_kernel, distance, h_a)
             end
         end
 
         @threaded semi for particle in each_integrated_particle(system)
-            rho_a = current_density(v, system, particle)
-            beta_ = -beta[particle] / (rho_a * ndims(system))
+            rho_a = @inbounds current_density(v, system, particle)
+            beta_ = -(@inbounds beta[particle]) / (rho_a * ndims(system))
 
             # A particle without neighbors has `beta = 0`. Avoid dividing by zero.
-            beta[particle] = ifelse(iszero(beta_), one(beta_), beta_)
+            @inbounds beta[particle] = ifelse(iszero(beta_), one(beta_), beta_)
         end
     end
 

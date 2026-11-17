@@ -22,8 +22,9 @@ function interact!(dv, v_particle_system, u_particle_system,
         # Note that `return` only exits the closure, i.e., skips the current neighbor.
         skip_zero_distance(particle_system) && distance < almostzero(h) && return
 
-        grad_kernel = symmetric_kernel_grad(particle_system, neighbor_system,
-                                            pos_diff, distance, particle, neighbor)
+        grad_kernel = @inbounds symmetric_kernel_grad(particle_system, neighbor_system,
+                                                      pos_diff, distance, particle,
+                                                      neighbor)
 
         # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
         # in bounds of the respective system. For performance reasons, we use `@inbounds`
@@ -68,9 +69,10 @@ function interact!(dv, v_particle_system, u_particle_system,
         v_b = current_velocity(v_neighbor_system, neighbor_system, neighbor)
         v_diff = v_a - v_b
 
-        pressure_evolution!(dv, particle_system, neighbor_system, v_diff, grad_kernel,
-                            particle, neighbor, pos_diff, distance,
-                            sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b, nu_edac)
+        @inbounds pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
+                                      grad_kernel, particle, neighbor, pos_diff, distance,
+                                      sound_speed, m_a, m_b, p_a, p_b, rho_a, rho_b,
+                                      nu_edac)
 
         drho_particle = zero(rho_a)
 
@@ -188,10 +190,10 @@ end
     return drho_particle + m_b * dot(v_diff, grad_kernel_a)
 end
 
-@inline function pressure_evolution!(dv, particle_system, neighbor_system, v_diff,
-                                     grad_kernel, particle, neighbor,
-                                     pos_diff, distance, sound_speed, m_a, m_b,
-                                     p_a, p_b, rho_a, rho_b, nu_edac)
+@propagate_inbounds function pressure_evolution!(dv, particle_system, neighbor_system,
+                                                 v_diff, grad_kernel, particle, neighbor,
+                                                 pos_diff, distance, sound_speed, m_a, m_b,
+                                                 p_a, p_b, rho_a, rho_b, nu_edac)
     return pressure_evolution!(Val(has_variable_smoothing_length(particle_system)),
                                dv, particle_system, neighbor_system, v_diff,
                                grad_kernel, particle, neighbor,
@@ -202,10 +204,11 @@ end
 # Variable smoothing length formulation of the EDAC equation. As in the code of Haftu et al.,
 # it depends on the pressure acceleration formulation: `inter_particle_averaged_pressure`
 # corresponds to `EDACEquation`, all other formulations to Eq. 6 (`EDACEquation2`).
-@inline function pressure_evolution!(::Val{true}, dv, particle_system, neighbor_system,
-                                     v_diff, grad_kernel, particle, neighbor,
-                                     pos_diff, distance, sound_speed, m_a, m_b,
-                                     p_a, p_b, rho_a, rho_b, nu_edac)
+@propagate_inbounds function pressure_evolution!(::Val{true}, dv, particle_system,
+                                                 neighbor_system, v_diff, grad_kernel,
+                                                 particle, neighbor,
+                                                 pos_diff, distance, sound_speed, m_a, m_b,
+                                                 p_a, p_b, rho_a, rho_b, nu_edac)
     (; reference_density) = get_refinement(particle_system)
     formulation = pressure_acceleration_formulation(particle_system)
 
@@ -288,9 +291,11 @@ end
 end
 
 # Damping term of Eq. 6 in Haftu et al.
-@inline function edac_damping_term(formulation, particle_system, neighbor_system,
-                                   particle, neighbor, grad_kernel, pos_diff, distance,
-                                   m_a, m_b, p_a, p_b, rho_a, rho_b, beta_a, nu_edac)
+@propagate_inbounds function edac_damping_term(formulation, particle_system,
+                                               neighbor_system, particle, neighbor,
+                                               grad_kernel, pos_diff, distance,
+                                               m_a, m_b, p_a, p_b, rho_a, rho_b, beta_a,
+                                               nu_edac)
     nu_a,
     nu_b,
     denominator = edac_damping_coefficients(particle_system, neighbor_system,
@@ -304,10 +309,11 @@ end
 end
 
 # Damping term of `EDACEquation` in the code of Haftu et al.
-@inline function edac_damping_term(::typeof(inter_particle_averaged_pressure),
-                                   particle_system, neighbor_system,
-                                   particle, neighbor, grad_kernel, pos_diff, distance,
-                                   m_a, m_b, p_a, p_b, rho_a, rho_b, beta_a, nu_edac)
+@propagate_inbounds function edac_damping_term(::typeof(inter_particle_averaged_pressure),
+                                               particle_system, neighbor_system,
+                                               particle, neighbor, grad_kernel, pos_diff,
+                                               distance, m_a, m_b, p_a, p_b, rho_a, rho_b,
+                                               beta_a, nu_edac)
     nu_a,
     nu_b,
     denominator = edac_damping_coefficients(particle_system, neighbor_system,
@@ -324,8 +330,9 @@ end
     return volume_term * eta_ab * (p_a - p_b) * dot(grad_kernel, pos_diff) / denominator
 end
 
-@inline function edac_damping_coefficients(particle_system, neighbor_system,
-                                           particle, neighbor, distance, nu_edac)
+@propagate_inbounds function edac_damping_coefficients(particle_system, neighbor_system,
+                                                       particle, neighbor, distance,
+                                                       nu_edac)
     h_a, h_b = pair_smoothing_lengths(particle_system, neighbor_system, particle, neighbor)
     h_reference = initial_smoothing_length(particle_system)
 
@@ -340,10 +347,11 @@ end
     return nu_a, nu_b, denominator
 end
 
-@inline function pressure_evolution!(::Val{false}, dv, particle_system, neighbor_system,
-                                     v_diff, grad_kernel, particle, neighbor,
-                                     pos_diff, distance, sound_speed, m_a, m_b,
-                                     p_a, p_b, rho_a, rho_b, nu_edac)
+@propagate_inbounds function pressure_evolution!(::Val{false}, dv, particle_system,
+                                                 neighbor_system, v_diff, grad_kernel,
+                                                 particle, neighbor,
+                                                 pos_diff, distance, sound_speed, m_a, m_b,
+                                                 p_a, p_b, rho_a, rho_b, nu_edac)
     volume_a = m_a / rho_a
     volume_b = m_b / rho_b
     volume_term = (volume_a^2 + volume_b^2) / m_a

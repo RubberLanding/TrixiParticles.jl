@@ -640,9 +640,13 @@ end
             rho_a = @inbounds current_density(v, system, particle)
             rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)
 
-            h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
+            # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
+            # in bounds of the respective system
+            h_a,
+            h_b = @inbounds pair_smoothing_lengths(system, neighbor_system,
+                                                   particle, neighbor)
             h_ab = (h_a + h_b) / 2
-            dx_a = particle_spacing(system, particle)
+            dx_a = @inbounds particle_spacing(system, particle)
 
             W = kernel(smoothing_kernel, distance, h_ab)
             Wdx = kernel(smoothing_kernel, h_ab / smoothing_length_factor, h_ab)

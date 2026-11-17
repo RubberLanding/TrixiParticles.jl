@@ -88,7 +88,10 @@ function collect_merge_partners!(system, u, semi, mass_limit_factor)
     set_zero!(merge_partner)
 
     system_coords = current_coordinates(u, system)
+
+    # Get these outside of the loop, since `semi` cannot be passed to a GPU kernel
     neighborhood_search = get_neighborhood_search(system, semi)
+    backend = semi.parallelization_backend
 
     # The nearest neighbor and its distance.
     # With equal distances, take the smaller index to be independent of the loop order.
@@ -96,23 +99,25 @@ function collect_merge_partners!(system, u, semi, mass_limit_factor)
     nearest(a, b) = (a[2], a[1]) <= (b[2], b[1]) ? a : b
 
     @threaded semi for particle in each_integrated_particle(system)
-        m_a = hydrodynamic_mass(system, particle)
-        m_ref_a = reference_mass(system, particle)
+        # `each_integrated_particle` only returns particles that are in bounds
+        m_a = @inbounds hydrodynamic_mass(system, particle)
+        m_ref_a = @inbounds reference_mass(system, particle)
         m_a < mass_limit_factor * m_ref_a || return
 
-        h_a = smoothing_length(system, particle)
+        h_a = @inbounds smoothing_length(system, particle)
 
         partner,
         _ = mapreduce_neighbor(nearest, system_coords, system_coords,
-                               neighborhood_search, semi.parallelization_backend,
+                               neighborhood_search, backend,
                                particle; init) do particle, neighbor, _, distance
             neighbor == particle && return init
 
-            h_b = smoothing_length(system, neighbor)
+            # The neighborhood search makes sure that `neighbor` is in bounds
+            h_b = @inbounds smoothing_length(system, neighbor)
             distance < (h_a + h_b) / 2 || return init
 
-            m_b = hydrodynamic_mass(system, neighbor)
-            m_ref_b = reference_mass(system, neighbor)
+            m_b = @inbounds hydrodynamic_mass(system, neighbor)
+            m_ref_b = @inbounds reference_mass(system, neighbor)
             m_b < mass_limit_factor * m_ref_b || return init
 
             # The merged particle must not be split again
@@ -121,14 +126,14 @@ function collect_merge_partners!(system, u, semi, mass_limit_factor)
             return (neighbor, distance)
         end
 
-        merge_partner[particle] = partner
+        @inbounds merge_partner[particle] = partner
     end
 
     return system
 end
 
 # A pair is merged if both particles chose each other
-@inline function is_merge_pair(merge_partner, particle)
+@propagate_inbounds function is_merge_pair(merge_partner, particle)
     partner = merge_partner[particle]
 
     return partner > 0 && merge_partner[partner] == particle
@@ -153,21 +158,23 @@ function apply_merging!(system, v, u, semi)
 
     # Each pair is merged by the thread of the particle with the smaller index.
     # This thread is the only one that reads or writes the data of both particles.
+    # `each_integrated_particle` only returns particles that are in bounds, and the
+    # partners are particles of this system found by the neighborhood search.
     @threaded semi for particle in each_integrated_particle(system)
-        is_merge_pair(merge_partner, particle) || return
+        (@inbounds is_merge_pair(merge_partner, particle)) || return
 
-        partner = merge_partner[particle]
+        partner = @inbounds merge_partner[particle]
         particle < partner || return
 
-        m_a = hydrodynamic_mass(system, particle)
-        m_b = hydrodynamic_mass(system, partner)
+        m_a = @inbounds hydrodynamic_mass(system, particle)
+        m_b = @inbounds hydrodynamic_mass(system, partner)
         m_merged = m_a + m_b
 
         # The position of `particle` relative to `partner`, across periodic boundaries.
         # Otherwise, a pair on opposite sides of a periodic box would be merged
         # into the middle of the box.
-        pos_a = current_coords(u, system, particle)
-        pos_b = current_coords(u, system, partner)
+        pos_a = @inbounds current_coords(u, system, particle)
+        pos_b = @inbounds current_coords(u, system, partner)
         pos_diff = periodic_pos_diff(pos_a - pos_b, periodic_box)
         distance = norm(pos_diff)
 
@@ -177,27 +184,29 @@ function apply_merging!(system, v, u, semi)
 
         # Smoothing length such that the kernel of the merged particle at its center
         # matches the kernels of both particles there (Eq. 34)
-        h_a = smoothing_length(system, particle)
-        h_b = smoothing_length(system, partner)
+        h_a = @inbounds smoothing_length(system, particle)
+        h_b = @inbounds smoothing_length(system, partner)
         w_a = m_a * kernel(smoothing_kernel, m_b / m_merged * distance, h_a)
         w_b = m_b * kernel(smoothing_kernel, m_a / m_merged * distance, h_b)
-        h_merged = (m_merged * kernel_0 / (w_a + w_b))^(1 / ndims(system))
+        h_merged = root_ndims(m_merged * kernel_0 / (w_a + w_b), Val(ndims(system)))
 
         # Conserve the momentum (Eq. 33)
-        velocity = (m_a * current_velocity(v, system, particle) +
-                    m_b * current_velocity(v, system, partner)) / m_merged
+        v_a = @inbounds current_velocity(v, system, particle)
+        v_b = @inbounds current_velocity(v, system, partner)
+        velocity = (m_a * v_a + m_b * v_b) / m_merged
 
         # As in the code of Haftu et al., the pressure is averaged by mass and
         # the density of `particle` is kept.
         # TODO: Averaging the density by mass as well is an option.
-        pressure = (m_a * current_pressure(v, system, particle) +
-                    m_b * current_pressure(v, system, partner)) / m_merged
+        p_a = @inbounds current_pressure(v, system, particle)
+        p_b = @inbounds current_pressure(v, system, partner)
+        pressure = (m_a * p_a + m_b * p_b) / m_merged
 
-        set_particle_position!(u, system, particle, position)
-        set_particle_velocity!(v, system, particle, velocity)
-        set_particle_pressure!(v, system, particle, pressure)
-        set_particle_mass!(system, particle, m_merged)
-        set_particle_smoothing_length!(system, particle, h_merged)
+        @inbounds set_particle_position!(u, system, particle, position)
+        @inbounds set_particle_velocity!(v, system, particle, velocity)
+        @inbounds set_particle_pressure!(v, system, particle, pressure)
+        @inbounds set_particle_mass!(system, particle, m_merged)
+        @inbounds set_particle_smoothing_length!(system, particle, h_merged)
 
         deactivate_particle!(system, partner, v, u)
     end

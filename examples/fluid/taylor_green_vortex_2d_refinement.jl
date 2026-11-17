@@ -77,8 +77,8 @@ fluid = RectangularShape(particle_spacing, (n_particles_xy, n_particles_xy), (0.
                          density=fluid_density, pressure=initial_pressure_function,
                          velocity=initial_velocity_function)
 
-box_logic = (system, particle, v, u,
-             semi) -> begin
+box_logic = (system, particle, v,
+             u) -> begin
     x_min = 0.35
     x_max = 0.65
     y_min = 0.35

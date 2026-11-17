@@ -680,8 +680,8 @@ end
                                 kernel_weight, particle, neighbor)
 end
 
-@inline function boundary_kernel_weight(boundary_model, system, neighbor_system,
-                                        distance, particle, neighbor)
+@propagate_inbounds function boundary_kernel_weight(boundary_model, system, neighbor_system,
+                                                    distance, particle, neighbor)
     return boundary_kernel_weight(Val(has_variable_smoothing_length(neighbor_system)),
                                   boundary_model, system, neighbor_system,
                                   distance, particle, neighbor)
@@ -692,8 +692,9 @@ end
     return smoothing_kernel(boundary_model, distance, particle)
 end
 
-@inline function boundary_kernel_weight(::Val{true}, boundary_model, system,
-                                        neighbor_system, distance, particle, neighbor)
+@propagate_inbounds function boundary_kernel_weight(::Val{true}, boundary_model, system,
+                                                    neighbor_system, distance, particle,
+                                                    neighbor)
     # Eq. 19 in Haftu et al. (2023)
     h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
     h_wf = (h_a + h_b) / 2

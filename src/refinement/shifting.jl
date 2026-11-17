@@ -126,7 +126,11 @@ end
                                                                            neighbor,
                                                                            pos_diff,
                                                                            distance
-            h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
+            # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
+            # in bounds of the respective system
+            h_a,
+            h_b = @inbounds pair_smoothing_lengths(system, neighbor_system,
+                                                   particle, neighbor)
             h_ab = (h_a + h_b) / 2
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
 
@@ -157,17 +161,18 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
 
     # Limit the shift. Afterwards, `shift` contains the shift that is applied.
     @threaded semi for particle in each_integrated_particle(system)
-        shift_a = extract_svector_flat(shift, Val(NDIMS), particle)
+        # `each_integrated_particle` only returns particles that are in bounds
+        shift_a = @inbounds extract_svector_flat(shift, Val(NDIMS), particle)
         shift_norm = norm(shift_a)
-        h_a = smoothing_length(system, particle)
+        h_a = @inbounds smoothing_length(system, particle)
 
         max_shift = max_shift_factor * h_a
         factor = theta * shift_norm > max_shift ? max_shift / shift_norm : theta
         for dim in 1:NDIMS
-            shift[linear_index_vector(dim, particle, NDIMS)] = factor * shift_a[dim]
+            @inbounds shift[linear_index_vector(dim, particle, NDIMS)] = factor * shift_a[dim]
         end
 
-        relative_shift[particle] = shift_norm / h_a
+        @inbounds relative_shift[particle] = shift_norm / h_a
     end
 
     foreach_system(semi) do neighbor_system
@@ -175,11 +180,12 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
     end
 
     @threaded semi for particle in each_integrated_particle(system)
-        applied_shift = extract_svector_flat(shift, Val(NDIMS), particle)
+        # `each_integrated_particle` only returns particles that are in bounds
+        applied_shift = @inbounds extract_svector_flat(shift, Val(NDIMS), particle)
 
-        position = current_coords(u, system, particle) + applied_shift
-        set_particle_position!(u, system, particle, position)
-        add_svector_flat!(total_shift, applied_shift, particle)
+        position = @inbounds current_coords(u, system, particle) + applied_shift
+        @inbounds set_particle_position!(u, system, particle, position)
+        @inbounds add_svector_flat!(total_shift, applied_shift, particle)
     end
 
     # Only the self-interaction neighborhood search is used in the next iteration
@@ -207,15 +213,17 @@ function reject_shift_into_boundary_zones!(system, neighbor_system::OpenBoundary
     NDIMS = ndims(system)
 
     @threaded semi for particle in each_integrated_particle(system)
-        shift_a = extract_svector_flat(shift, Val(NDIMS), particle)
-        new_position = current_coords(u, system, particle) + shift_a
+        # `each_integrated_particle` only returns particles that are in bounds
+        shift_a = @inbounds extract_svector_flat(shift, Val(NDIMS), particle)
+        new_position = @inbounds current_coords(u, system, particle) + shift_a
 
         foreach_noalloc(boundary_zones) do boundary_zone
             if is_in_boundary_zone(boundary_zone, new_position)
                 for dim in 1:NDIMS
-                    shift[linear_index_vector(dim, particle, NDIMS)] = zero(eltype(system))
+                    @inbounds shift[linear_index_vector(dim, particle,
+                                                        NDIMS)] = zero(eltype(system))
                 end
-                relative_shift[particle] = 0
+                @inbounds relative_shift[particle] = zero(eltype(system))
             end
         end
     end
@@ -254,7 +262,11 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
                                                                            neighbor,
                                                                            pos_diff,
                                                                            distance
-            h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
+            # `foreach_point_neighbor` makes sure that `particle` and `neighbor` are
+            # in bounds of the respective system
+            h_a,
+            h_b = @inbounds pair_smoothing_lengths(system, neighbor_system,
+                                                   particle, neighbor)
             grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, (h_a + h_b) / 2)
 
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
@@ -276,14 +288,17 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
     end
 
     @threaded semi for particle in each_integrated_particle(system)
-        velocity = current_velocity(v, system, particle) +
-                   extract_svector_flat(velocity_correction, Val(NDIMS), particle)
-        pressure = current_pressure(v, system, particle) + pressure_correction[particle]
+        # `each_integrated_particle` only returns particles that are in bounds
+        velocity = @inbounds current_velocity(v, system, particle) +
+                             extract_svector_flat(velocity_correction, Val(NDIMS),
+                                                  particle)
+        pressure = @inbounds current_pressure(v, system, particle) +
+                             pressure_correction[particle]
 
-        set_particle_velocity!(v, system, particle, velocity)
-        set_particle_pressure!(v, system, particle, pressure)
-        correct_density!(v, system, system.density_calculator, particle,
-                         density_correction[particle])
+        @inbounds set_particle_velocity!(v, system, particle, velocity)
+        @inbounds set_particle_pressure!(v, system, particle, pressure)
+        @inbounds correct_density!(v, system, system.density_calculator, particle,
+                                   density_correction[particle])
     end
 
     return system
@@ -328,7 +343,8 @@ end
     return current_velocity(v_neighbor, neighbor_system, neighbor)
 end
 
-@inline function correct_density!(v, system, ::ContinuityDensity, particle, correction)
+@propagate_inbounds function correct_density!(v, system, ::ContinuityDensity, particle,
+                                              correction)
     density = current_density(v, system, particle) + correction
     set_particle_density!(v, system, particle, density)
 
@@ -347,7 +363,10 @@ function update_smoothing_lengths!(system, u, semi)
     ELTYPE = eltype(system)
 
     system_coords = current_coordinates(u, system)
+
+    # Get these outside of the loop, since `semi` cannot be passed to a GPU kernel
     neighborhood_search = get_neighborhood_search(system, semi)
+    backend = semi.parallelization_backend
 
     # Sum of the masses and number of neighbors
     init = (zero(ELTYPE), 0)
@@ -355,23 +374,26 @@ function update_smoothing_lengths!(system, u, semi)
 
     # Each thread only reads and writes the smoothing length of its own particle
     @threaded semi for particle in each_integrated_particle(system)
-        radius = compact_support(smoothing_kernel, smoothing_length(system, particle))
+        # `each_integrated_particle` only returns particles that are in bounds
+        h_a = @inbounds smoothing_length(system, particle)
+        radius = compact_support(smoothing_kernel, h_a)
 
         mass_sum,
         n_neighbors = mapreduce_neighbor(op, system_coords, system_coords,
-                                         neighborhood_search,
-                                         semi.parallelization_backend,
+                                         neighborhood_search, backend,
                                          particle; init) do particle, neighbor, _, distance
             distance > radius && return init
 
-            return (hydrodynamic_mass(system, neighbor), 1)
+            # The neighborhood search makes sure that `neighbor` is in bounds
+            return (@inbounds(hydrodynamic_mass(system, neighbor)), 1)
         end
 
         # The particle itself is always a neighbor
         mass_avg = mass_sum / n_neighbors
-        spacing = (mass_avg / reference_density)^(1 / ndims(system))
-        set_particle_smoothing_length!(system, particle,
-                                       spacing_to_smoothing_length(system, spacing))
+        spacing = root_ndims(mass_avg / reference_density, Val(ndims(system)))
+        @inbounds set_particle_smoothing_length!(system, particle,
+                                                 spacing_to_smoothing_length(system,
+                                                                             spacing))
     end
 
     return system

@@ -910,7 +910,9 @@ end
 @inline function skip_unsupported_pairs(f::F, ::Val{true}, system, neighbor_system,
                                         skip_value) where {F}
     return @inline function (particle, neighbor, pos_diff, distance)
-        if !pair_in_support(system, neighbor_system, particle, neighbor, distance)
+        # The neighborhood search makes sure that `particle` and `neighbor` are in bounds
+        if !(@inbounds pair_in_support(system, neighbor_system, particle, neighbor,
+                                       distance))
             return skip_value
         end
 
@@ -919,7 +921,8 @@ end
 end
 
 # Whether a pair is within the larger of both compact supports
-@inline function pair_in_support(system, neighbor_system, particle, neighbor, distance)
+@propagate_inbounds function pair_in_support(system, neighbor_system, particle, neighbor,
+                                             distance)
     return pair_in_support(Val(has_variable_smoothing_length(system, neighbor_system)),
                            system, neighbor_system, particle, neighbor, distance)
 end
@@ -929,8 +932,8 @@ end
     return true
 end
 
-@inline function pair_in_support(::Val{true}, system, neighbor_system,
-                                 particle, neighbor, distance)
+@propagate_inbounds function pair_in_support(::Val{true}, system, neighbor_system,
+                                             particle, neighbor, distance)
     h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
 
     return distance <= compact_support(pair_smoothing_kernel(system), max(h_a, h_b))
@@ -939,19 +942,21 @@ end
 # The smoothing lengths used for the hydrodynamic interaction of a pair.
 # `system` must be a system with its own smoothing length for this interaction, so pass
 # the fluid system first when the other system is a structure.
-@inline function pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
+@propagate_inbounds function pair_smoothing_lengths(system, neighbor_system, particle,
+                                                    neighbor)
     h_a = pair_smoothing_length(system, particle, nothing)
     h_b = pair_smoothing_length(neighbor_system, neighbor, h_a)
 
     return h_a, h_b
 end
 
-@inline function pair_smoothing_length(system, particle, h_other)
+@propagate_inbounds function pair_smoothing_length(system, particle, h_other)
     return smoothing_length(system, particle)
 end
 
 # The smoothing length of a TLSPH system is only used for solid mechanics
-@inline function pair_smoothing_length(system::TotalLagrangianSPHSystem, particle, h_other)
+@propagate_inbounds function pair_smoothing_length(system::TotalLagrangianSPHSystem,
+                                                   particle, h_other)
     return smoothing_length(system.boundary_model, particle)
 end
 

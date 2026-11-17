@@ -86,8 +86,8 @@ state_equation = nothing
 # ==========================================================================================
 # ==== Refinement
 spatial_criterion = SpatialRefinementCriterion()
-inlet_logic = (system, particle, v, u,
-               semi) -> begin
+inlet_logic = (system, particle, v,
+               u) -> begin
     x_min = 0.0
     x_max = 0.15
     y_min = 0.0
@@ -101,8 +101,8 @@ inlet_logic = (system, particle, v, u,
     end
 end
 
-outlet_logic = (system, particle, v, u,
-                semi) -> begin
+outlet_logic = (system, particle, v,
+                u) -> begin
     x_min = 0.85
     x_max = 1.0
     y_min = 0.0

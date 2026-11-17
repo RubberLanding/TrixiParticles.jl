@@ -167,7 +167,7 @@ function extrapolate_values!(system,
                                                             eltype(system)}))
 
         system_search_radius = compact_support(system, fluid_system, particle)
-        smoothing_length_particle = smoothing_length(system, particle)
+        smoothing_length_particle = @inbounds smoothing_length(system, particle)
         # TODO: Not public API
         PointNeighbors.foreach_neighbor(fluid_coords, nhs, particle, ghost_node_position,
                                         system_search_radius) do particle, neighbor,
@@ -178,8 +178,8 @@ function extrapolate_values!(system,
             pressure_b = current_pressure(v_fluid, fluid_system, neighbor)
             v_b = current_velocity(v_fluid, fluid_system, neighbor)
 
-            h_ab = 0.5 *
-                   (smoothing_length_particle + smoothing_length(fluid_system, neighbor))
+            h_b = @inbounds smoothing_length(fluid_system, neighbor)
+            h_ab = (smoothing_length_particle + h_b) / 2
             kernel_value = kernel(fluid_system_kernel, distance, h_ab)
             grad_kernel = kernel_grad(fluid_system_kernel, pos_diff, distance, h_ab)
 
@@ -311,7 +311,7 @@ function extrapolate_values!(system, mirror_method::ZerothOrderMirroring,
         interpolated_velocity = Ref(zero(particle_coords))
 
         system_search_radius = compact_support(system, fluid_system, particle)
-        smoothing_length_particle = smoothing_length(system, particle)
+        smoothing_length_particle = @inbounds smoothing_length(system, particle)
         fluid_system_kernel = system_smoothing_kernel(fluid_system)
         # TODO: Not public API
         PointNeighbors.foreach_neighbor(fluid_coords, nhs, particle, ghost_node_position,
@@ -324,8 +324,8 @@ function extrapolate_values!(system, mirror_method::ZerothOrderMirroring,
             pressure_b = current_pressure(v_fluid, fluid_system, neighbor)
             v_b = current_velocity(v_fluid, fluid_system, neighbor)
 
-            h_ab = 0.5 *
-                   (smoothing_length_particle + smoothing_length(fluid_system, neighbor))
+            h_b = @inbounds smoothing_length(fluid_system, neighbor)
+            h_ab = (smoothing_length_particle + h_b) / 2
             W_ab = kernel(fluid_system_kernel, distance, h_ab)
             shepard_coefficient[] += volume_b * W_ab
 

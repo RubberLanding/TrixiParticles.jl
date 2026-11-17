@@ -47,11 +47,13 @@ end
     return nothing
 end
 
-@inline function pressure_acceleration(particle_system,
-                                       neighbor_system::Union{WallBoundarySystem{<:BoundaryModelMonaghanKajtar},
-                                                              TotalLagrangianSPHSystem{<:BoundaryModelMonaghanKajtar}},
-                                       particle, neighbor, m_a, m_b, p_a, p_b, rho_a, rho_b,
-                                       pos_diff, distance, grad_kernel, correction)
+# With particle refinement, `smoothing_length(particle_system, particle)` reads an array
+@propagate_inbounds function pressure_acceleration(particle_system,
+                                                   neighbor_system::Union{WallBoundarySystem{<:BoundaryModelMonaghanKajtar},
+                                                                          TotalLagrangianSPHSystem{<:BoundaryModelMonaghanKajtar}},
+                                                   particle, neighbor, m_a, m_b, p_a, p_b,
+                                                   rho_a, rho_b, pos_diff, distance,
+                                                   grad_kernel, correction)
     (; K, beta, boundary_particle_spacing) = neighbor_system.boundary_model
 
     # This is `distance - boundary_particle_spacing` in the paper. This factor makes
@@ -87,12 +89,13 @@ end
 end
 
 # The repulsive force does not depend on the kernel gradients of the pair
-@inline function pressure_acceleration_variable_h(::Val{true}, particle_system,
-                                                  neighbor_system::Union{WallBoundarySystem{<:BoundaryModelMonaghanKajtar},
-                                                                         TotalLagrangianSPHSystem{<:BoundaryModelMonaghanKajtar}},
-                                                  particle, neighbor, m_a, m_b, p_a, p_b,
-                                                  rho_a, rho_b, pos_diff, distance,
-                                                  grad_kernel, correction)
+@propagate_inbounds function pressure_acceleration_variable_h(::Val{true}, particle_system,
+                                                              neighbor_system::Union{WallBoundarySystem{<:BoundaryModelMonaghanKajtar},
+                                                                                     TotalLagrangianSPHSystem{<:BoundaryModelMonaghanKajtar}},
+                                                              particle, neighbor, m_a, m_b,
+                                                              p_a, p_b, rho_a, rho_b,
+                                                              pos_diff, distance,
+                                                              grad_kernel, correction)
     return pressure_acceleration(particle_system, neighbor_system, particle, neighbor,
                                  m_a, m_b, p_a, p_b, rho_a, rho_b, pos_diff, distance,
                                  grad_kernel, correction)

@@ -79,10 +79,39 @@ function ParticleRefinement(; spacing_ratio, min_spacing, max_spacing, reference
         refinement_criteria = (refinement_criteria,)
     end
 
+    # The default factors are `Float64`, so promote them with the passed values.
+    # The fluid system converts all values to its element type
+    # (see `convert_refinement_eltype`).
+    (spacing_ratio, min_spacing, max_spacing, smoothing_length_factor, reference_density,
+     max_mass_factor,
+     min_mass_factor) = promote(spacing_ratio, min_spacing, max_spacing,
+                                smoothing_length_factor, reference_density,
+                                max_mass_factor, min_mass_factor)
+
     return ParticleRefinement(spacing_ratio, min_spacing, max_spacing,
                               smoothing_length_factor, reference_density,
                               refinement_criteria, splitting_pattern, max_mass_factor,
                               min_mass_factor, shifting_technique, n_startup_rounds)
+end
+
+# Convert all values of the refinement to the element type of the fluid system.
+# Otherwise, the `Float64` defaults would turn `Float32` computations into
+# `Float64` computations, which are slow or not supported on GPUs.
+convert_refinement_eltype(::Nothing, ELTYPE) = nothing
+
+function convert_refinement_eltype(refinement::ParticleRefinement, ELTYPE)
+    (; spacing_ratio, min_spacing, max_spacing, smoothing_length_factor,
+     reference_density, criteria, splitting_pattern, max_mass_factor, min_mass_factor,
+     shifting_technique, n_startup_rounds) = refinement
+
+    return ParticleRefinement(convert(ELTYPE, spacing_ratio), convert(ELTYPE, min_spacing),
+                              convert(ELTYPE, max_spacing),
+                              convert(ELTYPE, smoothing_length_factor),
+                              convert(ELTYPE, reference_density), criteria,
+                              convert_splitting_eltype(splitting_pattern, ELTYPE),
+                              convert(ELTYPE, max_mass_factor),
+                              convert(ELTYPE, min_mass_factor),
+                              shifting_technique, n_startup_rounds)
 end
 
 # The spacing changes by at most `spacing_ratio` per call of Alg. 1, so it takes
@@ -100,9 +129,9 @@ end
 # spacing of the reference mass is at most `max_spacing`.
 @inline function max_smoothing_length(system)
     (; max_spacing, max_mass_factor) = get_refinement(system)
+    factor = root_ndims(max_mass_factor, Val(ndims(system)))
 
-    return spacing_to_smoothing_length(system,
-                                       max_mass_factor^(1 / ndims(system)) * max_spacing)
+    return spacing_to_smoothing_length(system, factor * max_spacing)
 end
 
 # The smoothing length that determines the search radius of the neighborhood searches
@@ -232,7 +261,7 @@ function create_cache_refinement(initial_condition, refinement)
 
     # The target spacing persists between refinement calls (see `update_target_spacing!`).
     # Initialize it with the spacing that corresponds to the initial mass.
-    target_spacing = (initial_condition.mass ./ reference_density) .^ (1 / NDIMS)
+    target_spacing = root_ndims.(initial_condition.mass ./ reference_density, Val(NDIMS))
     target_spacing_tmp = similar(target_spacing)
 
     # Use `zeros(Bool, n)` instead of `falses(n)`, since writing to a `BitVector`
@@ -301,25 +330,36 @@ end
 @propagate_inbounds function reference_mass(system, particle)
     (; reference_density) = get_refinement(system)
 
-    return reference_density * system.cache.target_spacing[particle]^ndims(system)
+    spacing = system.cache.target_spacing[particle]
+
+    return reference_density * power_ndims(spacing, Val(ndims(system)))
 end
+
+# `x^(1 / NDIMS)` and `x^NDIMS`, e.g., to convert between particle spacing and volume.
+# With `Float32` arguments, `^` computes in `Float64` on the CPU, which some GPUs
+# don't support, and `x^NDIMS` is only a multiplication for a literal exponent.
+@inline root_ndims(x, ::Val{1}) = x
+@inline root_ndims(x, ::Val{2}) = sqrt(x)
+@inline root_ndims(x, ::Val{3}) = cbrt(x)
+
+@inline power_ndims(x, ::Val{NDIMS}) where {NDIMS} = Base.literal_pow(^, x, Val(NDIMS))
 
 # A particle that is activated in a fluid system, e.g. by an inflow, gets the target spacing
 # that corresponds to its mass. Otherwise, it would keep the values of the buffer slot.
 @inline initialize_refined_particle!(system, particle) = system
 
-@inline function initialize_refined_particle!(system::AbstractFluidSystem, particle)
+@propagate_inbounds function initialize_refined_particle!(system::AbstractFluidSystem,
+                                                          particle)
     return initialize_refined_particle!(system, get_refinement(system), particle)
 end
 
 @inline initialize_refined_particle!(system, ::Nothing, particle) = system
 
-@inline function initialize_refined_particle!(system, refinement, particle)
+@propagate_inbounds function initialize_refined_particle!(system, refinement, particle)
     (; target_spacing, is_fixed) = system.cache
-    (; reference_density) = refinement
 
-    mass = hydrodynamic_mass(system, particle)
-    target_spacing[particle] = (mass / reference_density)^(1 / ndims(system))
+    # The spacing that corresponds to the mass of the particle
+    target_spacing[particle] = particle_spacing(system, refinement, particle)
     is_fixed[particle] = false
 
     return system

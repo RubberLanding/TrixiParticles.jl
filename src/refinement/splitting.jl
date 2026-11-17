@@ -52,9 +52,10 @@ function collect_split_candidates!(system, refinement, u_ode, semi)
     set_zero!(split_candidate)
 
     @threaded semi for particle in each_integrated_particle(system)
-        mass = hydrodynamic_mass(system, particle)
-        split_candidate[particle] = mass >
-                                    max_mass_factor * reference_mass(system, particle)
+        # `each_integrated_particle` only returns particles that are in bounds
+        mass = @inbounds hydrodynamic_mass(system, particle)
+        m_ref = @inbounds reference_mass(system, particle)
+        @inbounds split_candidate[particle] = mass > max_mass_factor * m_ref
     end
 
     foreach_system(semi) do neighbor_system
@@ -89,7 +90,8 @@ function skip_splitting_near_boundary!(system,
     (; epsilon) = splitting_pattern
 
     directions = split_directions(splitting_pattern, Val(ndims(system)))
-    min_distance = neighbor_system.initial_condition.particle_spacing / 2
+    min_distance = convert(eltype(system),
+                           neighbor_system.initial_condition.particle_spacing / 2)
 
     u = wrap_u(u_ode, system, semi)
     u_neighbor = wrap_u(u_ode, neighbor_system, semi)
@@ -100,13 +102,14 @@ function skip_splitting_near_boundary!(system,
     foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords, semi;
                            points=each_integrated_particle(system)) do particle, _,
                                                                        pos_diff, _
-        split_candidate[particle] || return
+        # The neighborhood search makes sure that `particle` is in bounds
+        (@inbounds split_candidate[particle]) || return
 
         # `pos_diff` is the position of `particle` relative to the boundary particle
-        offset = epsilon * smoothing_length(system, particle)
+        offset = epsilon * @inbounds smoothing_length(system, particle)
         for direction in directions
             if norm(pos_diff + offset * direction) < min_distance
-                split_candidate[particle] = false
+                @inbounds split_candidate[particle] = false
             end
         end
     end
@@ -130,17 +133,18 @@ function skip_splitting_near_boundary!(system, neighbor_system::OpenBoundarySyst
     u = wrap_u(u_ode, system, semi)
 
     @threaded semi for particle in each_integrated_particle(system)
-        split_candidate[particle] || return
+        # `each_integrated_particle` only returns particles that are in bounds
+        (@inbounds split_candidate[particle]) || return
 
-        position = current_coords(u, system, particle)
-        offset = epsilon * smoothing_length(system, particle)
+        position = @inbounds current_coords(u, system, particle)
+        offset = epsilon * @inbounds smoothing_length(system, particle)
 
         for direction in directions
             new_position = position + offset * direction
 
             foreach_noalloc(boundary_zones) do boundary_zone
                 if is_in_boundary_zone(boundary_zone, new_position)
-                    split_candidate[particle] = false
+                    @inbounds split_candidate[particle] = false
                 end
             end
         end
@@ -188,38 +192,40 @@ function apply_splitting!(system, v_ode, u_ode, semi)
     free_slots = findall(!, active_particle)
     @assert length(free_slots) >= length(candidates) * n_new_per_particle
 
+    # The candidates and free slots are valid particle indices, and the assertion above
+    # makes sure that there are enough free slots, so all accesses below are in bounds.
     @threaded semi for i in eachindex(candidates)
-        particle = candidates[i]
+        particle = @inbounds candidates[i]
 
-        h = smoothing_length(system, particle)
-        mass = hydrodynamic_mass(system, particle) / n_split
-        position = current_coords(u, system, particle)
-        velocity = current_velocity(v, system, particle)
+        h = @inbounds smoothing_length(system, particle)
+        mass = @inbounds hydrodynamic_mass(system, particle) / n_split
+        position = @inbounds current_coords(u, system, particle)
+        velocity = @inbounds current_velocity(v, system, particle)
         # TODO: The density of EDAC with `SummationDensity` is the one of the last
         # right-hand side evaluation. Check if this causes problems.
-        density = current_density(v, system, particle)
-        pressure = current_pressure(v, system, particle)
-        spacing = target_spacing[particle]
+        density = @inbounds current_density(v, system, particle)
+        pressure = @inbounds current_pressure(v, system, particle)
+        spacing = @inbounds target_spacing[particle]
 
         # The particle itself stays in the center (Vacondio et al. 2016)
-        set_particle_mass!(system, particle, mass)
-        set_particle_smoothing_length!(system, particle, alpha * h)
+        @inbounds set_particle_mass!(system, particle, mass)
+        @inbounds set_particle_smoothing_length!(system, particle, alpha * h)
 
         # As in the code of Haftu et al., the new particles copy the properties
         # of the particle
         for j in 1:n_new_per_particle
-            new_particle = free_slots[(i - 1) * n_new_per_particle + j]
+            new_particle = @inbounds free_slots[(i - 1) * n_new_per_particle + j]
             new_position = position + epsilon * h * directions[j]
 
-            set_particle_position!(u, system, new_particle, new_position)
-            set_particle_velocity!(v, system, new_particle, velocity)
-            set_particle_density!(v, system, new_particle, density)
-            set_particle_pressure!(v, system, new_particle, pressure)
-            set_particle_mass!(system, new_particle, mass)
-            set_particle_smoothing_length!(system, new_particle, alpha * h)
-            target_spacing[new_particle] = spacing
+            @inbounds set_particle_position!(u, system, new_particle, new_position)
+            @inbounds set_particle_velocity!(v, system, new_particle, velocity)
+            @inbounds set_particle_density!(v, system, new_particle, density)
+            @inbounds set_particle_pressure!(v, system, new_particle, pressure)
+            @inbounds set_particle_mass!(system, new_particle, mass)
+            @inbounds set_particle_smoothing_length!(system, new_particle, alpha * h)
+            @inbounds target_spacing[new_particle] = spacing
 
-            active_particle[new_particle] = true
+            @inbounds active_particle[new_particle] = true
         end
     end
 
