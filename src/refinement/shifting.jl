@@ -9,6 +9,8 @@ The particles are shifted iteratively. In each iteration, they are shifted by `t
 times the shift of Eq. 15, but by at most `max_shift_factor` times their smoothing length.
 The iteration stops when the largest shift of Eq. 15 is smaller than `tolerance` times
 the smoothing length of its particle, or after `max_iterations` iterations.
+A particle is not shifted in an iteration if it would end up in an open boundary zone
+of its fluid system, where it would be converted to an open boundary particle.
 The code of Haftu et al. instead uses three iterations with `theta=1` and a maximum shift
 of `0.00625` times the smoothing length.
 
@@ -144,14 +146,16 @@ end
 end
 
 # Shift the particles by `theta` times the shift of Eq. 15, but by at most
-# `max_shift_factor` times their smoothing length. Return the largest shift of Eq. 15
-# divided by the smoothing length of its particle.
+# `max_shift_factor` times their smoothing length. Particles that would end up in an open
+# boundary zone are not shifted (see `reject_shift_into_boundary_zones!`).
+# Return the largest shift of Eq. 15 divided by the smoothing length of its particle.
 function apply_shift!(system, u, semi, theta, max_shift_factor)
     (; shift, total_shift, relative_shift) = system.cache
     NDIMS = ndims(system)
 
     set_zero!(relative_shift)
 
+    # Limit the shift. Afterwards, `shift` contains the shift that is applied.
     @threaded semi for particle in each_integrated_particle(system)
         shift_a = extract_svector_flat(shift, Val(NDIMS), particle)
         shift_norm = norm(shift_a)
@@ -159,13 +163,23 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
 
         max_shift = max_shift_factor * h_a
         factor = theta * shift_norm > max_shift ? max_shift / shift_norm : theta
-        applied_shift = factor * shift_a
+        for dim in 1:NDIMS
+            shift[linear_index_vector(dim, particle, NDIMS)] = factor * shift_a[dim]
+        end
+
+        relative_shift[particle] = shift_norm / h_a
+    end
+
+    foreach_system(semi) do neighbor_system
+        reject_shift_into_boundary_zones!(system, neighbor_system, u, semi)
+    end
+
+    @threaded semi for particle in each_integrated_particle(system)
+        applied_shift = extract_svector_flat(shift, Val(NDIMS), particle)
 
         position = current_coords(u, system, particle) + applied_shift
         set_particle_position!(u, system, particle, position)
         add_svector_flat!(total_shift, applied_shift, particle)
-
-        relative_shift[particle] = shift_norm / h_a
     end
 
     # Only the self-interaction neighborhood search is used in the next iteration
@@ -173,6 +187,40 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
     update_nhs!(neighborhood_search, system, system, u, u, semi)
 
     return maximum(relative_shift)
+end
+
+@inline reject_shift_into_boundary_zones!(system, neighbor_system, u, semi) = system
+
+# Do not shift a particle into an open boundary zone of its fluid system, where the open
+# boundary would convert it to an open boundary particle. At an inflow, this adds mass:
+# a released fluid particle is a copy of the open boundary particle that crossed the face,
+# and that particle stays in the zone, moved back by the zone width. If the copy is shifted
+# back into the zone, it becomes an additional open boundary particle that releases
+# particles itself. The inflow then releases more mass than prescribed.
+function reject_shift_into_boundary_zones!(system, neighbor_system::OpenBoundarySystem,
+                                           u, semi)
+    # Only the fluid system of the open boundary converts particles
+    neighbor_system.fluid_system_index[] == system_indices(system, semi) || return system
+
+    (; shift, relative_shift) = system.cache
+    (; boundary_zones) = neighbor_system
+    NDIMS = ndims(system)
+
+    @threaded semi for particle in each_integrated_particle(system)
+        shift_a = extract_svector_flat(shift, Val(NDIMS), particle)
+        new_position = current_coords(u, system, particle) + shift_a
+
+        foreach_noalloc(boundary_zones) do boundary_zone
+            if is_in_boundary_zone(boundary_zone, new_position)
+                for dim in 1:NDIMS
+                    shift[linear_index_vector(dim, particle, NDIMS)] = zero(eltype(system))
+                end
+                relative_shift[particle] = 0
+            end
+        end
+    end
+
+    return system
 end
 
 # Correct the particle properties after shifting with a Taylor series expansion (Eq. 37),

@@ -188,7 +188,7 @@
         # A particle next to the bottom wall is moved towards the wall, so that shifting
         # moves it back. The fluid moves parallel to the resting wall.
         @testset "Velocity Correction at $wall_type Walls" for wall_type in ("Free-Slip",
-                                                                            "No-Slip")
+                                                                "No-Slip")
             # The wall viscosity requires a fluid viscosity
             fluid_viscosity = ViscosityAdami(nu=1e-3)
             wall_viscosity = wall_type == "No-Slip" ? fluid_viscosity : nothing
@@ -308,6 +308,61 @@
             # One iteration shifts by `theta` times Eq. 15, but at most `0.05 h`
             @test 0 < norm(shift_single) <= (1 + 1e-12) * 0.05 * smoothing_length
             @test norm(shift_single) < norm(shift_default)
+        end
+
+        @testset "No Shifting Into Open Boundary Zones" begin
+            fluid_system = edac(tank.fluid)
+
+            # The inflow zone is left of the face at `x = 0`
+            boundary_zone = BoundaryZone(; boundary_face=([0.0, 0.0], [0.0, 1.0]),
+                                         face_normal=[1.0, 0.0], boundary_type=InFlow(),
+                                         open_boundary_layers=2, density=reference_density,
+                                         particle_spacing)
+            open_boundary = OpenBoundarySystem(boundary_zone; fluid_system, buffer_size=4,
+                                               boundary_model=BoundaryModelDynamicalPressureZhang())
+            semi = Semidiscretization(fluid_system,
+                                      WallBoundarySystem(tank.boundary, boundary_model),
+                                      open_boundary; neighborhood_search,
+                                      parallelization_backend=SerialBackend())
+            ode = semidiscretize(semi, (0.0, 0.1))
+            v_ode, u_ode = ode.u0.x
+            semi = ode.p.semi
+            system = semi.systems[1]
+            u = TrixiParticles.wrap_u(u_ode, system, semi)
+            coordinates = copy(u)
+
+            # The same shift moves a particle next to the face (`x = 0.025`)
+            # into the zone, but keeps `center` in the fluid
+            near_face = nearest_particle(tank.fluid.coordinates, [0.025, 0.475])
+            shift_ = [-0.6 * particle_spacing, 0.0]
+            shift = reshape(system.cache.shift, 2, :)
+            shift .= 0
+            shift[:, near_face] .= shift_
+            shift[:, center] .= shift_
+            system.cache.total_shift .= 0
+
+            max_relative_shift = TrixiParticles.apply_shift!(system, u, semi, 1.0, 1.0)
+
+            total_shift = reshape(system.cache.total_shift, 2, :)
+            @test u[:, near_face] == coordinates[:, near_face]
+            @test iszero(total_shift[:, near_face])
+            @test u[:, center] ≈ coordinates[:, center] + shift_
+            @test total_shift[:, center] ≈ shift_
+
+            # The rejected particle is excluded from the convergence check
+            @test system.cache.relative_shift[near_face] == 0
+            @test max_relative_shift ≈ norm(shift_) / smoothing_length
+
+            # Without the open boundary, the particle next to the face is shifted
+            v_ode, u_ode, semi = semidiscretize_systems(edac(tank.fluid), compute_rhs=false)
+            system = semi.systems[1]
+            u = TrixiParticles.wrap_u(u_ode, system, semi)
+            shift = reshape(system.cache.shift, 2, :)
+            shift .= 0
+            shift[:, near_face] .= shift_
+            TrixiParticles.apply_shift!(system, u, semi, 1.0, 1.0)
+
+            @test u[:, near_face] ≈ coordinates[:, near_face] + shift_
         end
     end
 
