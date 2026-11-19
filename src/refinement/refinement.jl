@@ -173,13 +173,13 @@ Apply one round of particle refinement to all fluid systems with particle refine
     This can change the length of `v_ode` and `u_ode` (see `resize_systems!`).
 """
 function refinement!(semi, v_ode, u_ode)
+    # Update all NHS with the current coordinates. The NHS can be outdated when particles
+    # were moved, activated or deactivated after the last right-hand side evaluation,
+    # e.g., by the open boundaries in the `UpdateCallback`.
+    update_nhs!(semi, u_ode)
+
     foreach_system(semi) do system
         isnothing(get_refinement(system)) && return
-
-        # Update the self-interaction NHS with the current coordinates
-        u = wrap_u(u_ode, system, semi)
-        neighborhood_search = get_neighborhood_search(system, semi)
-        update_nhs!(neighborhood_search, system, system, u, u, semi)
 
         # Set the target spacing near boundaries and in criterion regions (Alg. 4)
         apply_refinement_criteria!(system, v_ode, u_ode, semi)
@@ -260,9 +260,13 @@ function create_cache_refinement(initial_condition, refinement)
     pressure_correction = zeros(ELTYPE, n_particles)
     density_correction = zeros(ELTYPE, n_particles)
 
+    # Vorticity criterion (see `VorticityRefinementCriterion`)
+    vorticity = zeros(ELTYPE, n_vorticity_components(NDIMS) * n_particles)
+    smoothed_vorticity = zeros(ELTYPE, n_particles)
+
     return (; target_spacing, target_spacing_tmp, is_fixed, split_candidate, merge_partner,
             shift, total_shift, relative_shift, velocity_correction, pressure_correction,
-            density_correction)
+            density_correction, vorticity, smoothed_vorticity)
 end
 
 resize_cache_refinement!(cache, ::Nothing, NDIMS, n, spacing) = cache
@@ -271,7 +275,7 @@ resize_cache_refinement!(cache, ::Nothing, NDIMS, n, spacing) = cache
 function resize_cache_refinement!(cache, refinement, NDIMS, n, spacing)
     (; target_spacing, target_spacing_tmp, is_fixed, split_candidate, merge_partner,
      shift, total_shift, relative_shift, velocity_correction, pressure_correction,
-     density_correction) = cache
+     density_correction, vorticity, smoothed_vorticity) = cache
     ELTYPE = eltype(target_spacing)
 
     resize_and_fill!(target_spacing, n, spacing)
@@ -286,6 +290,9 @@ function resize_cache_refinement!(cache, refinement, NDIMS, n, spacing)
     resize_and_fill!(velocity_correction, NDIMS * n, zero(ELTYPE))
     resize_and_fill!(pressure_correction, n, zero(ELTYPE))
     resize_and_fill!(density_correction, n, zero(ELTYPE))
+
+    resize_and_fill!(vorticity, n_vorticity_components(NDIMS) * n, zero(ELTYPE))
+    resize_and_fill!(smoothed_vorticity, n, zero(ELTYPE))
 
     return cache
 end

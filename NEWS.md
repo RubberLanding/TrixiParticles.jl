@@ -28,6 +28,8 @@ used in the Julia ecosystem. Notable changes will be documented in this file for
   - The refinement criteria `SpatialRefinementCriterion` and `SolutionRefinementCriterion`
     set the target spacing of the particles, which is graded between `min_spacing` and
     `max_spacing` of `ParticleRefinement` (#PR5 #TODO).
+  - The `VorticityRefinementCriterion` refines particles where the vorticity is large
+    (#PR12 #TODO).
   - Particles are split with `HexagonalSplitting` or `TriangularSplitting` and merged
     according to their target spacing (#PR6, #PR7 #TODO).
   - After splitting and merging, the particles are shifted with `ShiftingHaftu`.

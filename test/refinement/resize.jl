@@ -148,6 +148,10 @@
             @test TrixiParticles.each_active_particle(fluid_system) == active
             @test TrixiParticles.smoothing_length(fluid_system) isa Vector
             @test length(TrixiParticles.smoothing_length(fluid_system)) == n_new
+
+            # The vorticity is a scalar in 2D
+            @test length(fluid_system.cache.vorticity) == n_new
+            @test length(fluid_system.cache.smoothed_vorticity) == n_new
         end
 
         @testset "Ranges" begin

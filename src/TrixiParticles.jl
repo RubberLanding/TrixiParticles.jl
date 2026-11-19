@@ -124,6 +124,7 @@ export ColorfieldSurfaceNormal
 export SymplecticPositionVerlet
 export coordinates_eltype
 export ParticleRefinement, SpatialRefinementCriterion, SolutionRefinementCriterion,
-       HexagonalSplitting, TriangularSplitting, ShiftingHaftu
+       VorticityRefinementCriterion, HexagonalSplitting, TriangularSplitting,
+       ShiftingHaftu
 
 end # module
