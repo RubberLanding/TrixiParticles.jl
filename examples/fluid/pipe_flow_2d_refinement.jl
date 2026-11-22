@@ -75,8 +75,11 @@ smoothing_length_ratio = 1.5
 smoothing_length = smoothing_length_ratio * particle_spacing
 smoothing_kernel = WendlandC2Kernel{NDIMS}()
 
-# fluid_density_calculator = SummationDensity()
-fluid_density_calculator = ContinuityDensity()
+# With `ContinuityDensity`, EDAC has no mechanism that corrects density errors
+# (no equation of state, no density diffusion), so the density of single particles can
+# drift without bound. The summation density is bound to the particle positions.
+# This is also the formulation in the code of Haftu et al.
+fluid_density_calculator = SummationDensity()
 
 kinematic_viscosity = maximum(prescribed_velocity) * domain_size[2] / reynolds_number
 

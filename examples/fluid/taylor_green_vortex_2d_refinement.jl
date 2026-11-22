@@ -104,7 +104,11 @@ refinement = ParticleRefinement(; spacing_ratio=1.05,
 n_buffer_particles = 5000
 
 viscosity = ViscosityAdami(; nu)
-density_calculator = ContinuityDensity()
+# With `ContinuityDensity`, EDAC has no mechanism that corrects density errors
+# (no equation of state, no density diffusion), so the density of single particles can
+# drift without bound. The summation density is bound to the particle positions.
+# This is also the formulation in the code of Haftu et al.
+density_calculator = SummationDensity()
 correction = nothing
 
 fluid_system = EntropicallyDampedSPHSystem(fluid; smoothing_kernel, smoothing_length,
