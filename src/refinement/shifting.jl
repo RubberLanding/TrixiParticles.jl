@@ -157,7 +157,7 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
 
     # Limit the shift. Afterwards, `shift` contains the shift that is applied.
     @threaded semi for particle in each_integrated_particle(system)
-        shift_a = extract_svector_flat(shift, Val(NDIMS), particle)
+        shift_a = extract_svector_flat(shift, Val(ndims(system)), particle)
         shift_norm = norm(shift_a)
         h_a = smoothing_length(system, particle)
 
@@ -175,7 +175,7 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
     end
 
     @threaded semi for particle in each_integrated_particle(system)
-        applied_shift = extract_svector_flat(shift, Val(NDIMS), particle)
+        applied_shift = extract_svector_flat(shift, Val(ndims(system)), particle)
 
         position = current_coords(u, system, particle) + applied_shift
         set_particle_position!(u, system, particle, position)
@@ -207,7 +207,7 @@ function reject_shift_into_boundary_zones!(system, neighbor_system::OpenBoundary
     NDIMS = ndims(system)
 
     @threaded semi for particle in each_integrated_particle(system)
-        shift_a = extract_svector_flat(shift, Val(NDIMS), particle)
+        shift_a = extract_svector_flat(shift, Val(ndims(system)), particle)
         new_position = current_coords(u, system, particle) + shift_a
 
         foreach_noalloc(boundary_zones) do boundary_zone
@@ -265,7 +265,8 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
             p_a = @inbounds current_pressure(v, system, particle)
             p_b = @inbounds current_pressure(v_neighbor, neighbor_system, neighbor)
 
-            shift_a = @inbounds extract_svector_flat(total_shift, Val(NDIMS), particle)
+            shift_a = @inbounds extract_svector_flat(total_shift, Val(ndims(system)),
+                                                     particle)
             weight = m_b / rho_b * dot(grad_kernel, shift_a)
 
             @inbounds add_svector_flat!(velocity_correction, weight * (v_b - v_a),
@@ -277,7 +278,7 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
 
     @threaded semi for particle in each_integrated_particle(system)
         velocity = current_velocity(v, system, particle) +
-                   extract_svector_flat(velocity_correction, Val(NDIMS), particle)
+                   extract_svector_flat(velocity_correction, Val(ndims(system)), particle)
         pressure = current_pressure(v, system, particle) + pressure_correction[particle]
 
         set_particle_velocity!(v, system, particle, velocity)
