@@ -44,7 +44,7 @@ function shift_particles!(semi, v_ode, u_ode)
     end
 
     # Update all neighborhood searches that contain the shifted particles
-    update_nhs!(semi, u_ode)
+    @trixi_timeit timer() "update nhs" update_nhs!(semi, u_ode)
 
     return semi
 end
@@ -66,7 +66,8 @@ end
 # after splitting and merging
 function apply_refinement_shifting!(system, ::Nothing, v_ode, u_ode, semi)
     u = wrap_u(u_ode, system, semi)
-    update_smoothing_lengths!(system, u, semi)
+    @trixi_timeit timer() "smoothing lengths after" update_smoothing_lengths!(system, u,
+                                                                              semi)
 
     return system
 end
@@ -85,19 +86,25 @@ function apply_refinement_shifting!(system, shifting::ShiftingHaftu, v_ode, u_od
     set_zero!(total_shift)
 
     # Shift with smoothing lengths that match the masses after splitting and merging
-    update_smoothing_lengths!(system, u, semi)
+    @trixi_timeit timer() "smoothing lengths before" update_smoothing_lengths!(system, u,
+                                                                               semi)
 
     for _ in 1:max_iterations
-        compute_shift!(system, u, u_ode, semi)
-        max_relative_shift = apply_shift!(system, u, semi, theta, max_shift_factor)
+        @trixi_timeit timer() "compute shift" compute_shift!(system, u, u_ode, semi)
+        max_relative_shift = @trixi_timeit timer() "apply shift" begin
+            apply_shift!(system, u, semi, theta, max_shift_factor)
+        end
 
         max_relative_shift < tolerance && break
     end
 
-    correct_properties!(system, v, u, v_ode, u_ode, semi)
+    @trixi_timeit timer() "correct properties" begin
+        correct_properties!(system, v, u, v_ode, u_ode, semi)
+    end
 
     # Smoothing lengths for the shifted positions
-    update_smoothing_lengths!(system, u, semi)
+    @trixi_timeit timer() "smoothing lengths after" update_smoothing_lengths!(system, u,
+                                                                              semi)
 
     return system
 end
@@ -156,37 +163,45 @@ function apply_shift!(system, u, semi, theta, max_shift_factor)
     set_zero!(relative_shift)
 
     # Limit the shift. Afterwards, `shift` contains the shift that is applied.
-    @threaded semi for particle in each_integrated_particle(system)
-        shift_a = extract_svector_flat(shift, Val(ndims(system)), particle)
-        shift_norm = norm(shift_a)
-        h_a = smoothing_length(system, particle)
+    @trixi_timeit timer() "limit" begin
+        @threaded semi for particle in each_integrated_particle(system)
+            shift_a = extract_svector_flat(shift, Val(ndims(system)), particle)
+            shift_norm = norm(shift_a)
+            h_a = smoothing_length(system, particle)
 
-        max_shift = max_shift_factor * h_a
-        factor = theta * shift_norm > max_shift ? max_shift / shift_norm : theta
-        for dim in 1:NDIMS
-            shift[linear_index_vector(dim, particle, NDIMS)] = factor * shift_a[dim]
+            max_shift = max_shift_factor * h_a
+            factor = theta * shift_norm > max_shift ? max_shift / shift_norm : theta
+            for dim in 1:NDIMS
+                shift[linear_index_vector(dim, particle, NDIMS)] = factor * shift_a[dim]
+            end
+
+            relative_shift[particle] = shift_norm / h_a
         end
-
-        relative_shift[particle] = shift_norm / h_a
     end
 
-    foreach_system(semi) do neighbor_system
-        reject_shift_into_boundary_zones!(system, neighbor_system, u, semi)
+    @trixi_timeit timer() "reject shift into zones" begin
+        foreach_system(semi) do neighbor_system
+            reject_shift_into_boundary_zones!(system, neighbor_system, u, semi)
+        end
     end
 
-    @threaded semi for particle in each_integrated_particle(system)
-        applied_shift = extract_svector_flat(shift, Val(ndims(system)), particle)
+    @trixi_timeit timer() "apply" begin
+        @threaded semi for particle in each_integrated_particle(system)
+            applied_shift = extract_svector_flat(shift, Val(ndims(system)), particle)
 
-        position = current_coords(u, system, particle) + applied_shift
-        set_particle_position!(u, system, particle, position)
-        add_svector_flat!(total_shift, applied_shift, particle)
+            position = current_coords(u, system, particle) + applied_shift
+            set_particle_position!(u, system, particle, position)
+            add_svector_flat!(total_shift, applied_shift, particle)
+        end
     end
 
     # Only the self-interaction neighborhood search is used in the next iteration
     neighborhood_search = get_neighborhood_search(system, semi)
-    update_nhs!(neighborhood_search, system, system, u, u, semi)
+    @trixi_timeit timer() "update self nhs" begin
+        update_nhs!(neighborhood_search, system, system, u, u, semi)
+    end
 
-    return maximum(relative_shift)
+    return @trixi_timeit timer() "max shift" maximum(relative_shift)
 end
 
 @inline reject_shift_into_boundary_zones!(system, neighbor_system, u, semi) = system

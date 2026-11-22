@@ -24,7 +24,9 @@ function merge_particles!(semi, v_ode, u_ode; before_splitting=false)
     end
 
     # The neighborhood searches must not find the deactivated particles
-    n_merged > 0 && update_nhs!(semi, u_ode)
+    if n_merged > 0
+        @trixi_timeit timer() "update nhs" update_nhs!(semi, u_ode)
+    end
 
     return semi
 end
@@ -57,9 +59,11 @@ function merge_particles!(system, refinement, v_ode, u_ode, semi; before_splitti
 
     n_merged = 0
     for _ in 1:n_rounds
-        collect_merge_partners!(system, u, semi, mass_limit_factor)
+        @trixi_timeit timer() "merge partners" begin
+            collect_merge_partners!(system, u, semi, mass_limit_factor)
+        end
 
-        n_pairs = count_merge_pairs(system)
+        n_pairs = @trixi_timeit timer() "count pairs" count_merge_pairs(system)
         # Without new pairs, the following rounds would find the same partners
         n_pairs == 0 && break
 
@@ -68,12 +72,14 @@ function merge_particles!(system, refinement, v_ode, u_ode, semi; before_splitti
                                 "Pass `buffer_size` to the fluid system."))
         end
 
-        apply_merging!(system, v, u, semi)
+        @trixi_timeit timer() "apply merging" apply_merging!(system, v, u, semi)
         n_merged += n_pairs
 
         # The next round must not find the deactivated particles
-        update_system_buffer!(system.buffer)
-        update_nhs!(neighborhood_search, system, system, u, u, semi)
+        @trixi_timeit timer() "update self nhs" begin
+            update_system_buffer!(system.buffer)
+            update_nhs!(neighborhood_search, system, system, u, u, semi)
+        end
     end
 
     return n_merged

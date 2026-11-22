@@ -112,21 +112,27 @@ function apply_refinement!(refinement_function!, integrator)
     # the particle properties after shifting (Eq. 37). Before the first time step,
     # the summation density is not computed yet. Afterwards, the quantities are from
     # the last stage of the time step and not from the current positions.
-    update_systems_and_nhs(v_ode, u_ode, semi, integrator.t)
+    @trixi_timeit timer() "update systems before" begin
+        update_systems_and_nhs(v_ode, u_ode, semi, integrator.t)
+    end
 
     refinement_function!(semi, v_ode, u_ode)
 
     # Refinement resizes `v_ode` and `u_ode` when new particles don't fit
     # into the existing buffer (see `resize_systems!`)
     if length(v_ode) != length_v || length(u_ode) != length_u
-        resize!(integrator, (length(v_ode), length(u_ode)))
+        @trixi_timeit timer() "resize integrator" begin
+            resize!(integrator, (length(v_ode), length(u_ode)))
+        end
     end
 
     # Recompute all quantities that are stored in the systems (e.g. the pressure),
     # since particles were added, removed and moved.
     # Otherwise, they would be stale until the next update, for example when
     # the `UpdateCallback` comes before this callback.
-    update_systems_and_nhs(v_ode, u_ode, semi, integrator.t)
+    @trixi_timeit timer() "update systems after" begin
+        update_systems_and_nhs(v_ode, u_ode, semi, integrator.t)
+    end
 
     # Shifting velocities that are only computed in the `UpdateCallback` are not
     # updated above (e.g. `ParticleShiftingTechnique` with `update_everystage=false`)

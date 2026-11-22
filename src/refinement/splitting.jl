@@ -12,7 +12,7 @@ Split all particles of fluid systems with particle refinement whose mass is larg
 function split_particles!(semi, v_ode, u_ode)
     n_new_particles = zeros(Int, length(semi.systems))
 
-    foreach_system(semi) do system
+    @trixi_timeit timer() "candidates" foreach_system(semi) do system
         n_new_particles[system_indices(system, semi)] = collect_split_candidates!(system,
                                                                                   u_ode,
                                                                                   semi)
@@ -20,18 +20,20 @@ function split_particles!(semi, v_ode, u_ode)
 
     sum(n_new_particles) == 0 && return semi
 
-    capacities = [split_capacity(system, n_new_particles[i])
-                  for (i, system) in enumerate(semi.systems)]
-    resize_systems!(v_ode, u_ode, semi, capacities)
+    @trixi_timeit timer() "resize systems" begin
+        capacities = [split_capacity(system, n_new_particles[i])
+                      for (i, system) in enumerate(semi.systems)]
+        resize_systems!(v_ode, u_ode, semi, capacities)
+    end
 
-    foreach_system(semi) do system
+    @trixi_timeit timer() "apply splitting" foreach_system(semi) do system
         n_new_particles[system_indices(system, semi)] > 0 || return
 
         apply_splitting!(system, v_ode, u_ode, semi)
     end
 
     # The neighborhood searches have to find the new particles
-    update_nhs!(semi, u_ode)
+    @trixi_timeit timer() "update nhs" update_nhs!(semi, u_ode)
 
     return semi
 end

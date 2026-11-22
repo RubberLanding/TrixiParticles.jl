@@ -82,8 +82,10 @@ function resize_systems!(v_ode, u_ode, semi, n_particles)
         end
     end
 
-    resize_neighborhood_searches!(semi.neighborhood_search_handler, semi, resized)
-    initialize_resized_neighborhood_searches!(semi, u_ode, resized)
+    @trixi_timeit timer() "recreate nhs" begin
+        resize_neighborhood_searches!(semi.neighborhood_search_handler, semi, resized)
+        initialize_resized_neighborhood_searches!(semi, u_ode, resized)
+    end
 
     return semi
 end

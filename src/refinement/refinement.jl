@@ -247,31 +247,37 @@ function refinement!(semi, v_ode, u_ode)
     # Update all NHS with the current coordinates. The NHS can be outdated when particles
     # were moved, activated or deactivated after the last right-hand side evaluation,
     # e.g., by the open boundaries in the `UpdateCallback`.
-    update_nhs!(semi, u_ode)
+    @trixi_timeit timer() "update nhs" update_nhs!(semi, u_ode)
 
     foreach_system(semi) do system
         isnothing(get_refinement(system)) && return
 
         # Set the target spacing near boundaries and in criterion regions (Alg. 4)
-        apply_refinement_criteria!(system, v_ode, u_ode, semi)
+        @trixi_timeit timer() "criteria" begin
+            apply_refinement_criteria!(system, v_ode, u_ode, semi)
+        end
 
         # Update the target spacing of all other particles (Alg. 1)
-        update_target_spacing!(system, v_ode, u_ode, semi)
+        @trixi_timeit timer() "target spacing" begin
+            update_target_spacing!(system, v_ode, u_ode, semi)
+        end
     end
 
     # Merge before splitting, every particle below `m_max` is a candidate (Alg. 3).
     # Merging and splitting update all neighborhood searches.
-    merge_particles!(semi, v_ode, u_ode, before_splitting=true)
+    @trixi_timeit timer() "merge before splitting" begin
+        merge_particles!(semi, v_ode, u_ode, before_splitting=true)
+    end
 
     # Split the particles (Alg. 2)
-    split_particles!(semi, v_ode, u_ode)
+    @trixi_timeit timer() "split" split_particles!(semi, v_ode, u_ode)
 
     # Merge after splitting, only particles below `m_min` are candidates (Alg. 3)
-    merge_particles!(semi, v_ode, u_ode)
+    @trixi_timeit timer() "merge after splitting" merge_particles!(semi, v_ode, u_ode)
 
     # Shift the particles and correct the particle properties.
     # This also updates the smoothing lengths (Eq. 35) and all neighborhood searches.
-    shift_particles!(semi, v_ode, u_ode)
+    @trixi_timeit timer() "shift" shift_particles!(semi, v_ode, u_ode)
 
     return semi
 end
