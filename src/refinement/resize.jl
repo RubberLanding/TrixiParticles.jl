@@ -228,11 +228,11 @@ function initialize_resized_neighborhood_searches!(semi, u_ode, resized)
             u_system = wrap_u(u_ode, system, semi)
             u_neighbor = wrap_u(u_ode, neighbor, semi)
 
-            PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
-                                       current_coordinates(u_system, system),
-                                       current_coordinates(u_neighbor, neighbor),
-                                       eachindex_y=each_active_particle(neighbor),
-                                       parallelization_backend=semi.parallelization_backend)
+            initialize_nhs!(get_neighborhood_search(system, neighbor, semi), neighbor,
+                            current_coordinates(u_system, system),
+                            current_coordinates(u_neighbor, neighbor),
+                            eachindex_y=each_active_particle(neighbor),
+                            parallelization_backend=semi.parallelization_backend)
         end
     end
 

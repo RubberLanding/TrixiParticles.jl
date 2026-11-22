@@ -436,6 +436,8 @@ function check_configuration(fluid_system::AbstractFluidSystem, systems, nhs)
         end
     end
 
+    check_variable_search_radius(fluid_system, systems, nhs)
+
     if !(fluid_system isa ParticlePackingSystem) && !isnothing(fluid_system.surface_tension)
         foreach_system(systems) do neighbor
             if neighbor isa AbstractFluidSystem &&

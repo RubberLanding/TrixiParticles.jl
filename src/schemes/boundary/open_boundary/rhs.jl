@@ -12,13 +12,14 @@ function interact!(dv, v_particle_system, u_particle_system,
 
     h = initial_smoothing_length(particle_system)
 
+    # The pairs outside of the support of the average smoothing length are skipped below
+    search_radius = query_search_radius(particle_system, neighbor_system, semi)
+
     # Loop over all pairs of particles and neighbors within the kernel cutoff
     foreach_point_neighbor(particle_system, neighbor_system,
                            system_coords, neighbor_system_coords, semi;
-                           points=each_integrated_particle(particle_system)) do particle,
-                                                                                neighbor,
-                                                                                pos_diff,
-                                                                                distance
+                           points=each_integrated_particle(particle_system),
+                           search_radius) do particle, neighbor, pos_diff, distance
         # Skip neighbors with (almost) the same position because the kernel gradient
         # is zero, but computing it would divide by zero (see `almostzero`).
         # Note that `return` only exits the closure, i.e., skips the current neighbor.

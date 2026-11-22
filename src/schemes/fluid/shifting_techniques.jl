@@ -630,12 +630,12 @@ end
         system_coords = current_coordinates(u, system)
         neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
 
+        # The kernel of the average smoothing length vanishes outside of the support
+        # of the larger smoothing length
+        search_radius = query_search_radius(system, neighbor_system, semi)
         foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords,
-                               semi;
-                               points=each_integrated_particle(system)) do particle,
-                                                                           neighbor,
-                                                                           pos_diff,
-                                                                           distance
+                               semi; points=each_integrated_particle(system),
+                               search_radius) do particle, neighbor, pos_diff, distance
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
             rho_a = @inbounds current_density(v, system, particle)
             rho_b = @inbounds current_density(v_neighbor, neighbor_system, neighbor)

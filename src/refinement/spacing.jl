@@ -65,6 +65,7 @@ end
     radius = compact_support(system_smoothing_kernel(system),
                              smoothing_length(system, particle))
     neighborhood_search = get_neighborhood_search(system, semi)
+    search_radius = particle_search_radius(neighborhood_search, system, system, particle)
 
     # Minimum, maximum, sum of the logarithms and number of neighbors
     init = (typemax(ELTYPE), zero(ELTYPE), zero(ELTYPE), 0)
@@ -73,7 +74,9 @@ end
     spacing_min, spacing_max, log_spacing_sum,
     n_neighbors = mapreduce_neighbor(op, system_coords, system_coords,
                                      neighborhood_search, semi.parallelization_backend,
-                                     particle; init) do particle, neighbor, _, distance
+                                     particle; init,
+                                     search_radius) do particle, neighbor, _,
+                                                       distance
         distance > radius && return init
 
         spacing = target_spacing[neighbor]

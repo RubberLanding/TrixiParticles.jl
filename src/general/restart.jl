@@ -99,11 +99,11 @@ function initialize_neighborhood_search!(semi, system, neighbor, u0_ode)
     # TODO Initialize after adapting to the GPU.
     # Currently, this cannot use `semi.parallelization_backend`
     # because data is still on the CPU.
-    PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
-                               initial_restart_coordinates(system, u0_ode, semi),
-                               initial_restart_coordinates(neighbor, u0_ode, semi),
-                               eachindex_y=each_active_particle(neighbor),
-                               parallelization_backend=PolyesterBackend())
+    initialize_nhs!(get_neighborhood_search(system, neighbor, semi), neighbor,
+                    initial_restart_coordinates(system, u0_ode, semi),
+                    initial_restart_coordinates(neighbor, u0_ode, semi),
+                    eachindex_y=each_active_particle(neighbor),
+                    parallelization_backend=PolyesterBackend())
     return semi
 end
 

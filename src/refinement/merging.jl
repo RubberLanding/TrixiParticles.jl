@@ -107,11 +107,14 @@ function collect_merge_partners!(system, u, semi, mass_limit_factor)
         m_a < mass_limit_factor * m_ref_a || return
 
         h_a = smoothing_length(system, particle)
+        search_radius = particle_search_radius(neighborhood_search, system, system,
+                                               particle)
 
         partner,
         _ = mapreduce_neighbor(nearest, system_coords, system_coords,
                                neighborhood_search, semi.parallelization_backend,
-                               particle; init) do particle, neighbor, _, distance
+                               particle; init,
+                               search_radius) do particle, neighbor, _, distance
             neighbor == particle && return init
 
             h_b = smoothing_length(system, neighbor)

@@ -41,7 +41,8 @@ using TrixiBase: @trixi_timeit, timer, timeit_debug_enabled,
                                 SerialBackend, PolyesterBackend, ThreadsStaticBackend,
                                 ThreadsDynamicBackend, default_backend
 using PointNeighbors: PointNeighbors, foreach_point_neighbor, copy_neighborhood_search,
-                      @threaded, AbstractNeighborhoodSearch
+                      @threaded, AbstractNeighborhoodSearch, TreeNeighborhoodSearch,
+                      MaximumRadius, initialize_tree!
 using WriteVTK: vtk_grid, MeshCell, VTKCellTypes, VTKFieldData, paraview_collection,
                 vtk_save
 

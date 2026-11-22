@@ -89,6 +89,10 @@ function apply_refinement_shifting!(system, shifting::ShiftingHaftu, v_ode, u_od
     @trixi_timeit timer() "smoothing lengths before" update_smoothing_lengths!(system, u,
                                                                                semi)
 
+    # `compute_shift!` uses the smoothing lengths of the neighbors.
+    # With variable search radii, the tree must store the new smoothing lengths.
+    @trixi_timeit timer() "update search radii" update_search_radii!(system, u, semi)
+
     for _ in 1:max_iterations
         @trixi_timeit timer() "compute shift" compute_shift!(system, u, u_ode, semi)
         max_relative_shift = @trixi_timeit timer() "apply shift" begin
@@ -127,12 +131,12 @@ end
         u_neighbor = wrap_u(u_ode, neighbor_system, semi)
         neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
 
+        # The kernel of the average smoothing length vanishes outside of the support
+        # of the larger smoothing length
+        search_radius = query_search_radius(system, neighbor_system, semi)
         foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords,
-                               semi;
-                               points=each_integrated_particle(system)) do particle,
-                                                                           neighbor,
-                                                                           pos_diff,
-                                                                           distance
+                               semi; points=each_integrated_particle(system),
+                               search_radius) do particle, neighbor, pos_diff, distance
             h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
             h_ab = (h_a + h_b) / 2
             m_b = @inbounds hydrodynamic_mass(neighbor_system, neighbor)
@@ -263,12 +267,12 @@ function correct_properties!(system, v, u, v_ode, u_ode, semi)
         u_neighbor = wrap_u(u_ode, neighbor_system, semi)
         neighbor_coords = current_coordinates(u_neighbor, neighbor_system)
 
+        # The kernel of the average smoothing length vanishes outside of the support
+        # of the larger smoothing length
+        search_radius = query_search_radius(system, neighbor_system, semi)
         foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords,
-                               semi;
-                               points=each_integrated_particle(system)) do particle,
-                                                                           neighbor,
-                                                                           pos_diff,
-                                                                           distance
+                               semi; points=each_integrated_particle(system),
+                               search_radius) do particle, neighbor, pos_diff, distance
             h_a, h_b = pair_smoothing_lengths(system, neighbor_system, particle, neighbor)
             grad_kernel = kernel_grad(smoothing_kernel, pos_diff, distance, (h_a + h_b) / 2)
 
@@ -372,12 +376,15 @@ function update_smoothing_lengths!(system, u, semi)
     # Each thread only reads and writes the smoothing length of its own particle
     @threaded semi for particle in each_integrated_particle(system)
         radius = compact_support(smoothing_kernel, smoothing_length(system, particle))
+        search_radius = particle_search_radius(neighborhood_search, system, system,
+                                               particle)
 
         mass_sum,
         n_neighbors = mapreduce_neighbor(op, system_coords, system_coords,
                                          neighborhood_search,
                                          semi.parallelization_backend,
-                                         particle; init) do particle, neighbor, _, distance
+                                         particle; init,
+                                         search_radius) do particle, neighbor, _, distance
             distance > radius && return init
 
             return (hydrodynamic_mass(system, neighbor), 1)

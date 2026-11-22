@@ -407,12 +407,10 @@ function update_beta!(system, refinement, v, u, v_ode, u_ode, semi)
             # Loop over all pairs of particles and neighbors within the kernel cutoff.
             # The neighborhood search can return neighbors outside of the compact support
             # of `particle`, but the safe kernel derivative is zero for these neighbors.
+            search_radius = query_search_radius(system, neighbor_system, semi)
             foreach_point_neighbor(system, neighbor_system, system_coords, neighbor_coords,
-                                   semi;
-                                   points=each_integrated_particle(system)) do particle,
-                                                                               neighbor,
-                                                                               pos_diff,
-                                                                               distance
+                                   semi; points=each_integrated_particle(system),
+                                   search_radius) do particle, neighbor, pos_diff, distance
                 m_b = hydrodynamic_mass(neighbor_system, neighbor)
                 h_a = smoothing_length(system, particle)
 

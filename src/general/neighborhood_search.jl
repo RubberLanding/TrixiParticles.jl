@@ -2,14 +2,17 @@
 # Loop over all pairs of particles and neighbors within the kernel cutoff.
 # `f(particle, neighbor, pos_diff, distance)` is called for every particle-neighbor pair.
 # By default, loop over `eachparticle(system)`.
+# `search_radius` is `nothing` for the search radius of the neighborhood search, or a
+# function `particle -> search radius` (see `query_search_radius`).
 @inline function PointNeighbors.foreach_point_neighbor(f, system::AbstractSystem,
                                                        neighbor_system::AbstractSystem,
                                                        system_coords, neighbor_coords, semi;
                                                        points=eachparticle(system),
-                                                       parallelization_backend=semi.parallelization_backend)
+                                                       parallelization_backend=semi.parallelization_backend,
+                                                       search_radius=nothing)
     neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
     foreach_point_neighbor(f, system_coords, neighbor_coords, neighborhood_search;
-                           points, parallelization_backend)
+                           points, parallelization_backend, search_radius)
 end
 
 deactivate_out_of_bounds_particles!(system, buffer, nhs, v_ode, u_ode, semi) = system
@@ -58,38 +61,43 @@ function deactivate_out_of_bounds_particles!(system, ::SystemBuffer, nhs,
 end
 
 @propagate_inbounds function foreach_neighbor(f, system_coords, neighbor_coords,
-                                              neighborhood_search, backend, particle)
+                                              neighborhood_search, backend, particle;
+                                              search_radius=PointNeighbors.search_radius(neighborhood_search))
     PointNeighbors.foreach_neighbor(f, system_coords, neighbor_coords,
-                                    neighborhood_search, particle)
+                                    neighborhood_search, particle; search_radius)
 end
 
 @propagate_inbounds function mapreduce_neighbor(f, op, system_coords, neighbor_coords,
                                                 neighborhood_search, backend, particle;
-                                                init)
+                                                init,
+                                                search_radius=PointNeighbors.search_radius(neighborhood_search))
     PointNeighbors.mapreduce_neighbor(f, op, system_coords, neighbor_coords,
-                                      neighborhood_search, particle; init)
+                                      neighborhood_search, particle; init, search_radius)
 end
 
 # We cannot dispatch by `AbstractGPUArray` because this is called from within
 # a kernel, where the arrays are device arrays (like `CuDeviceArray`),
 # which are not `AbstractGPUArray`s.
 @inline function foreach_neighbor(f, system_coords, neighbor_coords, neighborhood_search,
-                                  backend::KernelAbstractions.GPU, particle)
+                                  backend::KernelAbstractions.GPU, particle;
+                                  search_radius=PointNeighbors.search_radius(neighborhood_search))
     # On GPUs, remove all bounds checks for maximum performance.
     # Note that this is not safe if the neighborhood search was not initialized correctly.
     # For example, this is unsafe when benchmarking `interact!` with the wrong NHS.
     PointNeighbors.foreach_neighbor_unsafe(f, system_coords, neighbor_coords,
-                                           neighborhood_search, particle)
+                                           neighborhood_search, particle; search_radius)
 end
 
 @inline function mapreduce_neighbor(f, op, system_coords, neighbor_coords,
                                     neighborhood_search,
-                                    backend::KernelAbstractions.GPU, particle; init)
+                                    backend::KernelAbstractions.GPU, particle; init,
+                                    search_radius=PointNeighbors.search_radius(neighborhood_search))
     # On GPUs, remove all bounds checks for maximum performance.
     # Note that this is not safe if the neighborhood search was not initialized correctly.
     # For example, this is unsafe when benchmarking `interact!` with the wrong NHS.
     PointNeighbors.mapreduce_neighbor_unsafe(f, op, system_coords, neighbor_coords,
-                                             neighborhood_search, particle; init)
+                                             neighborhood_search, particle; init,
+                                             search_radius)
 end
 
 # === Compact support selection ===
@@ -546,11 +554,11 @@ function initialize_neighborhood_search!(semi, system, neighbor)
     # TODO Initialize after adapting to the GPU.
     # Currently, this cannot use `semi.parallelization_backend`
     # because data is still on the CPU.
-    PointNeighbors.initialize!(get_neighborhood_search(system, neighbor, semi),
-                               initial_coordinates(system),
-                               initial_coordinates(neighbor),
-                               eachindex_y=each_active_particle(neighbor),
-                               parallelization_backend=PolyesterBackend())
+    initialize_nhs!(get_neighborhood_search(system, neighbor, semi), neighbor,
+                    initial_coordinates(system),
+                    initial_coordinates(neighbor),
+                    eachindex_y=each_active_particle(neighbor),
+                    parallelization_backend=PolyesterBackend())
 
     return semi
 end
@@ -591,10 +599,11 @@ function update_nhs!(neighborhood_search,
                                      RigidBodySystem},
                      u_system, u_neighbor, semi)
     # The current coordinates of fluids and structures change over time
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 # -- Fluid / wall interactions
@@ -604,10 +613,10 @@ function update_nhs!(neighborhood_search,
                      neighbor::WallBoundarySystem,
                      u_system, u_neighbor, semi)
     # Boundary coordinates only change over time when `neighbor.ismoving[]`
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, neighbor.ismoving[]))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, neighbor.ismoving[]))
 end
 
 # -- Open boundary interactions
@@ -618,10 +627,11 @@ function update_nhs!(neighborhood_search,
 
     # TODO: Update only `active_coordinates` of open boundaries.
     # Problem: Removing inactive particles from neighboring lists is necessary.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
@@ -631,40 +641,44 @@ function update_nhs!(neighborhood_search,
 
     # TODO: Update only `active_coordinates` of open boundaries.
     # Problem: Removing inactive particles from neighboring lists is necessary.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
                      system::OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang},
                      neighbor::OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang},
                      u_system, u_neighbor, semi)
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
                      system::OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang},
                      neighbor::TotalLagrangianSPHSystem,
                      u_system, u_neighbor, semi)
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
                      system::TotalLagrangianSPHSystem,
                      neighbor::OpenBoundarySystem{<:BoundaryModelDynamicalPressureZhang},
                      u_system, u_neighbor, semi)
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
@@ -697,10 +711,11 @@ function update_nhs!(neighborhood_search,
                      system::TotalLagrangianSPHSystem, neighbor::AbstractFluidSystem,
                      u_system, u_neighbor, semi)
     # The current coordinates of fluids and structured change over time
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
@@ -715,10 +730,10 @@ function update_nhs!(neighborhood_search,
                      u_system, u_neighbor, semi)
     # The current coordinates of structured change over time.
     # Boundary coordinates only change over time when `neighbor.ismoving[]`.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, neighbor.ismoving[]))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, neighbor.ismoving[]))
 end
 
 function update_nhs!(neighborhood_search,
@@ -734,10 +749,11 @@ function update_nhs!(neighborhood_search,
                      neighbor::Union{AbstractFluidSystem, RigidBodySystem},
                      u_system, u_neighbor, semi)
     # The current coordinates of fluids and structures change over time.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true), eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 function update_nhs!(neighborhood_search,
@@ -752,10 +768,10 @@ function update_nhs!(neighborhood_search,
                      u_system, u_neighbor, semi)
     # The current coordinates of structures change over time.
     # Boundary coordinates only change over time when `neighbor.ismoving[]`.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, neighbor.ismoving[]))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, neighbor.ismoving[]))
 end
 
 # -- Wall dummy particle interactions
@@ -770,11 +786,11 @@ function update_nhs!(neighborhood_search,
     #
     # Boundary coordinates only change over time when `neighbor.ismoving[]`.
     # The current coordinates of fluids and structured change over time.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(system.ismoving[], true),
-            eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(system.ismoving[], true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 # This function is the same as the one above to avoid ambiguous dispatch when using `Union`
@@ -789,11 +805,11 @@ function update_nhs!(neighborhood_search,
     #
     # Boundary coordinates only change over time when `neighbor.ismoving[]`.
     # The current coordinates of open boundaries change over time.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(system.ismoving[], true),
-            eachindex_y=each_active_particle(neighbor))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(system.ismoving[], true),
+                                eachindex_y=each_active_particle(neighbor))
 end
 
 # This function is the same as the one above to avoid ambiguous dispatch when using `Union`
@@ -808,10 +824,10 @@ function update_nhs!(neighborhood_search,
     #
     # Boundary coordinates only change over time when `neighbor.ismoving[]`.
     # The current coordinates of fluids and structured change over time.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(system.ismoving[], true))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(system.ismoving[], true))
 end
 
 # Rigid-wall contact is only computed from the rigid system side. `WallBoundarySystem`
@@ -832,10 +848,11 @@ function update_nhs!(neighborhood_search,
                      u_system, u_neighbor, semi)
     # `system` coordinates only change over time when `system.ismoving[]`.
     # `neighbor` coordinates only change over time when `neighbor.ismoving[]`.
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(system.ismoving[], neighbor.ismoving[]))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi,
+                                points_moving=(system.ismoving[], neighbor.ismoving[]))
 end
 
 # -- DEM interactions
@@ -843,20 +860,20 @@ function update_nhs!(neighborhood_search,
                      system::DEMSystem, neighbor::DEMSystem,
                      u_system, u_neighbor, semi)
     # Both coordinates change over time
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, true))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, true))
 end
 
 function update_nhs!(neighborhood_search,
                      system::DEMSystem, neighbor::BoundaryDEMSystem,
                      u_system, u_neighbor, semi)
     # DEM coordinates change over time, the boundary coordinates don't
-    update!(neighborhood_search,
-            current_coordinates(u_system, system),
-            current_coordinates(u_neighbor, neighbor),
-            semi, points_moving=(true, false))
+    update_neighborhood_search!(neighborhood_search, neighbor,
+                                current_coordinates(u_system, system),
+                                current_coordinates(u_neighbor, neighbor),
+                                semi, points_moving=(true, false))
 end
 
 # -- Combinations that are never used
@@ -893,10 +910,149 @@ function update_nhs!(neighborhood_search,
 end
 
 # === PointNeighbors forwarding ===
-function update!(neighborhood_search, x, y, semi; points_moving=(true, true),
-                 eachindex_y=axes(y, 2))
+# `neighbor` is the system of the coordinates `y`
+function update_neighborhood_search!(neighborhood_search, neighbor, x, y, semi;
+                                     points_moving=(true, true), eachindex_y=axes(y, 2))
     PointNeighbors.update!(neighborhood_search, x, y; points_moving, eachindex_y,
                            parallelization_backend=semi.parallelization_backend)
+end
+
+function update_neighborhood_search!(neighborhood_search::TreeNeighborhoodSearch, neighbor,
+                                     x, y, semi; points_moving=(true, true),
+                                     eachindex_y=axes(y, 2))
+    # The tree only stores the points `y`. It is always rebuilt from scratch.
+    points_moving[2] || return neighborhood_search
+
+    initialize_nhs!(neighborhood_search, neighbor, x, y; eachindex_y,
+                    parallelization_backend=semi.parallelization_backend)
+end
+
+function initialize_nhs!(neighborhood_search, neighbor, x, y; eachindex_y,
+                         parallelization_backend)
+    PointNeighbors.initialize!(neighborhood_search, x, y; eachindex_y,
+                               parallelization_backend)
+end
+
+function initialize_nhs!(neighborhood_search::TreeNeighborhoodSearch, neighbor, x, y;
+                         eachindex_y, parallelization_backend)
+    # A search radius of zero is only used for pairs that never interact
+    # (see `compact_support`). `copy_neighborhood_search` then returns an empty template
+    # without a tree, which cannot be built.
+    iszero(PointNeighbors.search_radius(neighborhood_search)) && return neighborhood_search
+
+    # Write the search radii directly into the array of the neighborhood search,
+    # which `initialize_tree!` then uses without copying
+    search_radii = neighborhood_search.search_radii
+    resize!(search_radii, size(y, 2))
+    set_search_radii!(search_radii, neighborhood_search, neighbor, parallelization_backend)
+
+    initialize_tree!(neighborhood_search, y, search_radii; eachindex_y,
+                     parallelization_backend)
+end
+
+# === Variable search radii with the `TreeNeighborhoodSearch` ===
+# With variable smoothing lengths, the `GridNeighborhoodSearch` uses the compact support of
+# the largest smoothing length as search radius for all particles. The neighbor loops then
+# skip the pairs outside of the support they need, which is the support of the larger
+# smoothing length (`pair_in_support`), of the average smoothing length, or of the smoothing
+# length of `particle`.
+#
+# With a `TreeNeighborhoodSearch` with `MaximumRadius()`, each particle of a system with
+# variable smoothing lengths gets its own search radius, which is the compact support of its
+# smoothing length, but at most the search radius `R` of the neighborhood search:
+# - The tree is built with the search radii `r_b` of the neighbor particles.
+# - Neighbor loops that opt in (see `query_search_radius` and `particle_search_radius`)
+#   query with the search radius `r_a` of `particle` and find all neighbors within
+#   `max(r_a, r_b) = min(max(cs_a, cs_b), R)`, where `cs_a` and `cs_b` are the compact
+#   supports of both particles.
+# Since `R` is the search radius of the `GridNeighborhoodSearch`, these loops skip
+# exactly the same pairs as with the grid, as long as they don't need more than the
+# support of the larger smoothing length.
+#
+# The search radii of the neighbors are only used when both systems have variable
+# smoothing lengths. A system with a constant smoothing length is stored with the radius `R`
+# for all particles and queried with the radius `R`, as with a uniform search radius.
+# Its pairs with refined particles can need the support of its smoothing length, which is
+# not stored in the tree.
+#
+# The search radii are copied into the tree when it is built, so they are only up to date
+# after an update of the neighborhood search. Loops that use the smoothing length of the
+# neighbor must not run between a change of the smoothing lengths and the next update.
+# Loops that only use the support of `particle` are always correct.
+const VariableRadiusTreeNHS = TreeNeighborhoodSearch{<:Any, <:Any, <:Any, MaximumRadius}
+
+# Whether the particles of `system` have their own search radius in `neighborhood_search`
+@inline uses_variable_search_radius(neighborhood_search, system) = false
+
+@inline function uses_variable_search_radius(::VariableRadiusTreeNHS, system)
+    return has_variable_smoothing_length(system)
+end
+
+@inline function uses_variable_search_radius(neighborhood_search, system, neighbor_system)
+    return uses_variable_search_radius(neighborhood_search, system) &&
+           uses_variable_search_radius(neighborhood_search, neighbor_system)
+end
+
+# The compact support of `particle`, but at most the search radius of the NHS
+@inline function variable_search_radius(neighborhood_search, system, particle)
+    compact_support_ = compact_support(system_smoothing_kernel(system),
+                                       smoothing_length(system, particle))
+
+    return min(compact_support_, PointNeighbors.search_radius(neighborhood_search))
+end
+
+function set_search_radii!(search_radii, neighborhood_search, neighbor, backend)
+    if uses_variable_search_radius(neighborhood_search, neighbor)
+        @threaded backend for particle in eachindex(search_radii)
+            search_radii[particle] = variable_search_radius(neighborhood_search, neighbor,
+                                                            particle)
+        end
+    else
+        fill!(search_radii, PointNeighbors.search_radius(neighborhood_search))
+    end
+
+    return search_radii
+end
+
+# The query search radius of `particle` of `system` for `foreach_neighbor`
+# and `mapreduce_neighbor`
+@inline function particle_search_radius(neighborhood_search, system, neighbor_system,
+                                        particle)
+    if uses_variable_search_radius(neighborhood_search, system, neighbor_system)
+        return variable_search_radius(neighborhood_search, system, particle)
+    end
+
+    return PointNeighbors.search_radius(neighborhood_search)
+end
+
+# The keyword argument `search_radius` of `foreach_point_neighbor` to query the neighbors
+# of each particle of `system` with its own search radius.
+# Only pass this when `system_coords` are the coordinates of the particles of `system`
+# and when the loop skips all pairs outside of the support of the larger smoothing length.
+@inline function query_search_radius(system, neighbor_system, semi)
+    neighborhood_search = get_neighborhood_search(system, neighbor_system, semi)
+
+    return search_radius_function(neighborhood_search, system, neighbor_system)
+end
+
+@inline function search_radius_function(neighborhood_search, system, neighbor_system)
+    if uses_variable_search_radius(neighborhood_search, system, neighbor_system)
+        return particle -> variable_search_radius(neighborhood_search, system, particle)
+    end
+
+    # Use the search radius of the neighborhood search
+    return nothing
+end
+
+# Update the self-interaction neighborhood search after the smoothing lengths of `system`
+# have changed, so that the tree stores the new search radii
+function update_search_radii!(system, u, semi)
+    neighborhood_search = get_neighborhood_search(system, semi)
+    uses_variable_search_radius(neighborhood_search, system) || return system
+
+    update_nhs!(neighborhood_search, system, system, u, u, semi)
+
+    return system
 end
 
 # === Neighbor loops for variable smoothing lengths ===
@@ -977,11 +1133,14 @@ end
     return system.boundary_model.smoothing_kernel
 end
 
+# These loops skip all pairs outside of the support of the larger smoothing length,
+# so they can query each particle with its own search radius (see `query_search_radius`)
 @inline function foreach_symmetric_point_neighbor(f, system, neighbor_system,
                                                   system_coords, neighbor_coords, semi;
                                                   kwargs...)
     foreach_point_neighbor(skip_unsupported_pairs(f, system, neighbor_system, nothing),
                            system, neighbor_system, system_coords, neighbor_coords, semi;
+                           search_radius=query_search_radius(system, neighbor_system, semi),
                            kwargs...)
 end
 
@@ -989,7 +1148,37 @@ end
                                                           system_coords, neighbor_coords,
                                                           neighborhood_search, backend,
                                                           particle; init)
+    search_radius = particle_search_radius(neighborhood_search, system, neighbor_system,
+                                           particle)
+
     return mapreduce_neighbor(skip_unsupported_pairs(f, system, neighbor_system, init), op,
                               system_coords, neighbor_coords, neighborhood_search,
-                              backend, particle; init)
+                              backend, particle; init, search_radius)
+end
+
+check_variable_search_radius(system, systems, neighborhood_search) = nothing
+
+# The tree stores the compact support of each neighbor with the kernel of its system,
+# but the pairs are skipped with the kernel of the query system (see `pair_in_support`).
+# Both must have the same compact support for the same smoothing length.
+function check_variable_search_radius(system, systems,
+                                      neighborhood_search::VariableRadiusTreeNHS)
+    has_variable_smoothing_length(system) || return nothing
+
+    h = one(eltype(system))
+    compact_support_ = compact_support(system_smoothing_kernel(system), h)
+
+    foreach_system(systems) do neighbor
+        has_variable_smoothing_length(neighbor) || return
+
+        if !isapprox(compact_support(system_smoothing_kernel(neighbor), h),
+                     compact_support_)
+            throw(ArgumentError("with variable search radii in the " *
+                                "`TreeNeighborhoodSearch`, all systems with variable " *
+                                "smoothing lengths must use smoothing kernels with the " *
+                                "same compact support"))
+        end
+    end
+
+    return nothing
 end
