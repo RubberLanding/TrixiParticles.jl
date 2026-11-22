@@ -36,6 +36,13 @@ Refinement is applied by the [`ParticleRefinementCallback`](@ref), which also bu
 graded particle distribution before the time integration starts.
 The fluid system needs a `buffer_size`, since splitting activates buffer particles.
 
+With a [`FullGridCellList`](@ref), the cells of the neighborhood searches that store the
+particles of a fluid with refinement hold many more particles than without refinement,
+since the cell size is determined by the coarsest particles. Therefore, the
+`max_points_per_cell` of these cell lists is increased automatically to four times the
+number of particles in a cell with a uniform distribution at `min_spacing`.
+A larger `max_points_per_cell` passed to the cell list is kept.
+
 # Keywords
 - `spacing_ratio`:           Largest ratio between the target spacings of neighboring
                              particles. The target spacing of a particle in a uniform
@@ -116,6 +123,70 @@ end
     # The initial particles can be coarser than `max_spacing`.
     # They are split in `refinement_startup!`.
     return max(initial_smoothing_length(system), max_smoothing_length(system))
+end
+
+# The cells of a neighborhood search that stores the particles of a fluid with refinement
+# hold many more particles than the cells of a fluid without refinement. The cell size
+# is the compact support of the largest smoothing length (see `search_smoothing_length`),
+# but the cells can be filled with particles of the minimum spacing.
+# Right after splitting, the new particles are even denser than a uniform distribution at
+# the minimum spacing, until they are merged and shifted. In the 2D refinement examples,
+# the fullest cell after splitting holds up to 3.1 times the particles of a uniform
+# distribution, so a safety factor of 4 is used.
+const REFINEMENT_POINTS_PER_CELL_FACTOR = 4
+
+# Increase the cell capacity of `neighborhood_search` if it stores the particles
+# of `neighbor` and `neighbor` is a fluid with refinement.
+# Otherwise, return `neighborhood_search` unchanged.
+# Note that the capacity is only increased and never decreased, so a larger capacity
+# that is passed by the user is kept. `resize_systems!` keeps the capacity as well.
+function ensure_refinement_cell_capacity(neighborhood_search, neighbor)
+    return neighborhood_search
+end
+
+function ensure_refinement_cell_capacity(neighborhood_search::GridNeighborhoodSearch,
+                                         neighbor)
+    return ensure_refinement_cell_capacity(neighborhood_search,
+                                           neighborhood_search.cell_list, neighbor)
+end
+
+ensure_refinement_cell_capacity(nhs, cell_list, neighbor) = nhs
+
+# Only the `DynamicVectorOfVectors` backend has a fixed capacity per cell
+function ensure_refinement_cell_capacity(nhs,
+                                         cell_list::FullGridCellList{<:PointNeighbors.DynamicVectorOfVectors},
+                                         neighbor)
+    n_required = refinement_points_per_cell(neighbor, nhs.cell_size)
+    n_required <= PointNeighbors.max_points_per_cell(cell_list.cells) && return nhs
+
+    # Create a template with the required capacity and copy it
+    # with the same search radius and number of points
+    template_cell_list = FullGridCellList(; cell_list.min_corner, cell_list.max_corner,
+                                          backend=typeof(cell_list.cells),
+                                          max_points_per_cell=n_required)
+    template = GridNeighborhoodSearch{ndims(nhs)}(; cell_list=template_cell_list,
+                                                  nhs.periodic_box, nhs.update_strategy)
+
+    return copy_neighborhood_search(template, PointNeighbors.search_radius(nhs),
+                                    nparticles(neighbor))
+end
+
+@inline refinement_points_per_cell(system, cell_size) = 0
+
+@inline function refinement_points_per_cell(system::AbstractFluidSystem, cell_size)
+    return refinement_points_per_cell(system, get_refinement(system), cell_size)
+end
+
+@inline refinement_points_per_cell(system, ::Nothing, cell_size) = 0
+
+function refinement_points_per_cell(system, refinement, cell_size)
+    # A search radius of zero is used for neighborhood searches that are never used
+    any(iszero, cell_size) && return 0
+
+    # The number of particles in a cell with a uniform distribution at the minimum spacing
+    n_uniform = prod(cell_size ./ refinement.min_spacing)
+
+    return ceil(Int, REFINEMENT_POINTS_PER_CELL_FACTOR * n_uniform)
 end
 
 # Warn if a neighborhood search of a fluid with refinement has a smaller search radius

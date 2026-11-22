@@ -4,6 +4,7 @@
     include("edac.jl")
     include("resize.jl")
     include("search_radius.jl")
+    include("cell_capacity.jl")
     include("callback.jl")
     include("open_boundary.jl")
     include("refinement_criteria.jl")

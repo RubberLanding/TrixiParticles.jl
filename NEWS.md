@@ -36,6 +36,9 @@ used in the Julia ecosystem. Notable changes will be documented in this file for
     The `ParticleShiftingTechnique` supports variable smoothing lengths (#PR8 #TODO).
   - The `ParticleRefinementCallback` applies refinement during the simulation.
     Neighborhood searches cover the largest smoothing length a particle can reach (#PR9 #TODO).
+    The `max_points_per_cell` of a `FullGridCellList` that stores refined particles is
+    increased automatically, so the finest particles fit into the cells of the coarsest
+    particles (#TODO).
   - Refinement works together with an `OpenBoundarySystem` (#PR10 #TODO).
 - Added the `ThrustCalculator` custom quantity to calculate the hydrodynamic force exerted by
   interacting fluid systems on a `TotalLagrangianSPHSystem` along a given `direction` (#1229).

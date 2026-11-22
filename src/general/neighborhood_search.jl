@@ -279,8 +279,12 @@ end
 
 # === Neighborhood search creation ===
 function create_neighborhood_search(neighborhood_search, system, neighbor)
-    return copy_neighborhood_search(neighborhood_search, compact_support(system, neighbor),
-                                    nparticles(neighbor))
+    nhs = copy_neighborhood_search(neighborhood_search, compact_support(system, neighbor),
+                                   nparticles(neighbor))
+
+    # The cells store the particles of `neighbor`, which need a larger capacity
+    # when `neighbor` is a fluid with particle refinement
+    return ensure_refinement_cell_capacity(nhs, neighbor)
 end
 
 function create_neighborhood_search(neighborhood_search, system::TotalLagrangianSPHSystem,
@@ -451,8 +455,12 @@ function SharedNHSHandler(neighborhood_search::AbstractNeighborhoodSearch, syste
                                 for system in systems))
                     for neighbor in systems]
 
-    searches = [[copy_neighborhood_search(neighborhood_search, search_radius,
-                                          nparticles(neighbor))
+    # The cells store the particles of `neighbor`, which need a larger capacity
+    # when `neighbor` is a fluid with particle refinement
+    searches = [[ensure_refinement_cell_capacity(copy_neighborhood_search(neighborhood_search,
+                                                                          search_radius,
+                                                                          nparticles(neighbor)),
+                                                 neighbor)
                  for search_radius in search_radii[neighbor_index]]
                 for (neighbor_index, neighbor) in pairs(systems)]
 
