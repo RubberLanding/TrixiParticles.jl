@@ -12,4 +12,5 @@
     include("splitting.jl")
     include("merging.jl")
     include("shifting.jl")
+    include("interpolation.jl")
 end

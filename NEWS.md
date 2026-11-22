@@ -40,6 +40,9 @@ used in the Julia ecosystem. Notable changes will be documented in this file for
     increased automatically, so the finest particles fit into the cells of the coarsest
     particles (#TODO).
   - Refinement works together with an `OpenBoundarySystem` (#PR10 #TODO).
+  - `interpolate_points`, `interpolate_line` and `interpolate_plane_2d`/`_3d` use the
+    smoothing length of each particle by default when the reference system has particle
+    refinement (#TODO).
 - Added the `ThrustCalculator` custom quantity to calculate the hydrodynamic force exerted by
   interacting fluid systems on a `TotalLagrangianSPHSystem` along a given `direction` (#1229).
 - Added `StructureMotionCalculator`, a custom quantity for the `PostprocessCallback`
