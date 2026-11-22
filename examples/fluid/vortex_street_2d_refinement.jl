@@ -208,38 +208,9 @@ saving_callback = SolutionSavingCallback(dt=0.01, prefix="")
 
 extra_callback = nothing
 
-startup_done = Ref(false)
-function apply_refinement!(integrator)
-    v_ode = integrator.u.x[1]
-    u_ode = integrator.u.x[2]
-    semi = integrator.p.semi
-    length_u_before = length(u_ode)
-
-    # Build the graded spacing field before the first time step
-    if !startup_done[]
-        TrixiParticles.refinement_startup!(semi, v_ode, u_ode)
-        startup_done[] = true
-    end
-
-    TrixiParticles.refinement!(semi, v_ode, u_ode)
-
-    if length(u_ode) > length_u_before
-        resize!(integrator, (length(v_ode), length(u_ode)))
-    end
-
-    derivative_discontinuity!(integrator, true)
-end
-
-last_refined_step = Ref(-1)
-function refinement_condition(u, t, integrator)
-    n = integrator.stats.naccept
-    (n % 10 == 0 && n != last_refined_step[]) || return false
-    last_refined_step[] = n
-    return true
-end
-
-refinement_callback = DiscreteCallback(refinement_condition, apply_refinement!,
-                                       save_positions=(false, false))
+# Builds the graded spacing field before the first time step,
+# then refines every 10 time steps
+refinement_callback = ParticleRefinementCallback(interval=10)
 
 callbacks = CallbackSet(info_callback, saving_callback, UpdateCallback(), extra_callback,
                         refinement_callback)
