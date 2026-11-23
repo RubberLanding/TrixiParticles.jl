@@ -44,21 +44,6 @@ function is_selected(run_name)
     return isempty(patterns) || any(pattern -> occursin(pattern, run_name), patterns)
 end
 
-# Resolution ratios (max_spacing / min_spacing) above this give near-coincident particles
-# after the refinement startup, sometimes NaN, and a collapsing time step (see the plan,
-# "E1 status"). Sweeps keep their planned ratios and run only the ones up to this limit
-# (user, 2026-11-22). Raise it once the startup is fixed.
-const MAX_STABLE_RESOLUTION_RATIO = 2
-
-function stable_resolution_ratios(ratios)
-    stable = filter(ratio -> ratio <= MAX_STABLE_RESOLUTION_RATIO, collect(ratios))
-    skipped = setdiff(collect(ratios), stable)
-    isempty(skipped) ||
-        @warn "Skipping resolution ratios $skipped (> MAX_STABLE_RESOLUTION_RATIO = $MAX_STABLE_RESOLUTION_RATIO)"
-
-    return stable
-end
-
 function results_directory(experiment_directory, run_name)
     return joinpath(experiment_directory, "results", experiment_profile(), run_name)
 end
